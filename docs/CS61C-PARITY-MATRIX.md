@@ -272,6 +272,13 @@ VS Code 内（`proj2/.vscode/launch.json`）：
 
 **必须支持（P0）**：A1 assemble/run、A2 `.import`+`.globl`+源映射、A6 断点、A5 step/run/pause/step back、A7 寄存器读改、A8 程序参数、A9 **真实磁盘文件 I/O**、A10 **退出码**、A11 **`-cc` / `-mc` / `-mcv` / `--coverageFile` / `--def`**、A3 指令集与 `.globl` 语法。
 
-**课程未使用，无需支持**：Chocopy、LED/Robot/SevenSeg 外设、浮点/CSR/特权、交互式 stdin、网页终端 `mount/vdb/run/edit`、cache 视图、Dark Mode、`--trace`。
+**课程未使用，无需支持**：Chocopy、LED/Robot/SevenSeg 外设、浮点/CSR/特权、交互式 stdin、cache 视图、Dark Mode、`--trace`。
+
+> **网页 Venus 工作流（`-dm` + `mount local vmfs` + 网页 `vdb`）**：Fa24 题面（`proj2/index.html:235-242`、
+> `labs/lab03/index.html:230-237`、`resources/venus-reference/index.html:237-256,384-395`）确实用它挂载本地目录并在
+> 浏览器里调试，但那属于"传输/托管"层，不是需要复刻的功能：原生插件在进程内运行模拟器，以 launch `cwd` 为根直接读写
+> 工作区（宿主文件 I/O 桥），文件浏览/编辑由 VS Code 承担，`vdb` 由原生 DAP 调试（断点/步进/Pause/Prev）代替。
+> 因此验收不应要求 `java -jar tools/venus.jar . -dm`；`/vmfs/...` 只是网页端挂载名，程序应使用相对 launch `cwd`
+> 的路径。逐条映射与非声明见 `docs/WEB-VENUS-MOUNT-PARITY.md`。
 
 **当前最大缺口排序**：① 构建链缺失（阻断一切验证）→ ② 文件 I/O 不落宿主磁盘 → ③ `-cc`/`-mc`/coverage/`--def` 全缺 → ④ 退出码未上报 → ⑤ 内存不可写、`-wd` 缺失 → ⑥ step back 与文档漂移。

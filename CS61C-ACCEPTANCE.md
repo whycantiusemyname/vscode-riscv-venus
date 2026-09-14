@@ -37,6 +37,14 @@ file, the program arguments and the effective working directory the runtime was
 initialised with. The `cwd` launch attribute is forwarded to the runtime, where
 the host-disk bridge consumes it; relative program paths are resolved against it.
 
+Native file access replaces the Fa24 web-Venus mount workflow (`java -jar
+tools/venus.jar . -dm` plus the browser's `mount local vmfs`): the extension never
+starts a mount server and needs no `--port` or session key, because the simulator
+reads and writes the workspace through the host file I/O bridge rooted at that
+launch `cwd`. The browser-only `/vmfs` path prefix has no native equivalent, so
+teaching programs use paths relative to the launch `cwd`; the step-by-step mapping
+is in `docs/WEB-VENUS-MOUNT-PARITY.md`.
+
 The course JAR remains authoritative for calling-convention checking,
 memcheck, file-I/O error behavior, and exit-code tests. This extension does not
 claim to replace `venus.jar -cc`, `venus.jar -mc`, or the Project 2 test suite.

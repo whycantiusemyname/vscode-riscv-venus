@@ -189,8 +189,10 @@ export class VenusDebugSession extends LoggingDebugSession {
 		// make VS Code to show a 'step back' button
 		response.body.supportsStepBack = true;
 
-		// make VS Code to support data breakpoints
-		response.body.supportsDataBreakpoints = true;
+		// Data breakpoints are not implemented: dataBreakpointInfoRequest never
+		// returns a dataId (the simulator has no watchpoints), so a data
+		// breakpoint could never be armed. Only advertise what can be honoured.
+		response.body.supportsDataBreakpoints = false;
 
 		// make VS Code to support completion in REPL
 		response.body.supportsCompletionsRequest = true;
@@ -424,6 +426,16 @@ export class VenusDebugSession extends LoggingDebugSession {
 	}
 
 	protected setVariableRequest(response: DebugProtocol.SetVariableResponse, args: DebugProtocol.SetVariableArguments, request?: DebugProtocol.Request): void {
+		// Venus discards register writes while a run loop is scheduled, so the
+		// adapter must refuse them instead of reporting a write that never
+		// happened. Memory edits are guarded the same way in writeMemoryRequest.
+		if (this._runtime.isRunning()) {
+			response.success = false;
+			response.message = 'Registers can only be edited while the program is paused';
+			this.sendResponse(response);
+			return;
+		}
+
 		// The names come from the Variables view, which labels integer
 		// registers "x05 (t0)   ", float registers "f05" and CSRs "mstatus ".
 		const format = workspace.getConfiguration('riscv-venus').get<string>('variableFormat');

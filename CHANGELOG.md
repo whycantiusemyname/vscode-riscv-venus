@@ -4,8 +4,10 @@
   byte addressed, little endian simulator memory that `lw`/`sw` use
 * Accept Venus literal values (`0x1f`, `0b101`, `'a'`) and ABI register names
   (`t0`) when editing, and report the value read back from the simulator
-* Refresh the Memory view after a debugger write; refuse writes while the
-  program runs or into an immutable text segment
+* Refresh the Memory view after a debugger write; refuse register and memory
+  writes while the program runs or into an immutable text segment
+* Stop advertising data breakpoints: `dataBreakpointInfo` never offers a
+  `dataId`, so no data breakpoint could be armed
 
 ## 1.9.1
 * Add binary format to memory view

@@ -174,6 +174,152 @@ suite('CS61C native register and memory editing', () => {
           data: word.toString('base64')
         });
       }, 'writing memory while the program runs must be rejected');
+
+      // Register writes go through the same paused-only rule: the simulator
+      // discards them while running, so the adapter must not report success.
+      await assert.rejects(async () => {
+        await session!.customRequest('setVariable', {
+          variablesReference: scope,
+          name: 'x28 (t3) ',
+          value: '0x2a'
+        });
+      }, 'writing a register while the program runs must be rejected');
+    } finally {
+      tracker.dispose();
+    }
+  });
+
+  test('advertises only the editing capabilities that are implemented', async () => {
+    const transcript = new DebugTranscript();
+    const tracker = vscode.debug.registerDebugAdapterTrackerFactory('venus', {
+      createDebugAdapterTracker: () => transcript.tracker()
+    });
+
+    try {
+      const started = await vscode.debug.startDebugging(undefined, {
+        type: 'venus',
+        request: 'launch',
+        name: 'CS61C capability truthfulness',
+        program,
+        stopOnEntry: true,
+        stopAtBreakpoints: true
+      });
+      assert.strictEqual(started, true, 'debug session should start');
+      await transcript.waitFor(stopped('entry'));
+
+      const response = transcript.messages.find(message =>
+        message.type === 'response' && message.command === 'initialize');
+      assert.ok(response, 'the adapter must answer the initialize request');
+      const body = response!.body || {};
+      const capabilities = body.capabilities || body;
+
+      // implemented: register writes, the memory requests and Prev
+      assert.strictEqual(capabilities.supportsSetVariable, true);
+      assert.strictEqual(capabilities.supportsReadMemoryRequest, true);
+      assert.strictEqual(capabilities.supportsWriteMemoryRequest, true);
+      assert.strictEqual(capabilities.supportsStepBack, true);
+      // not implemented: dataBreakpointInfo never offers a dataId and the
+      // simulator has no watchpoints, so no data breakpoint can be armed
+      assert.notStrictEqual(capabilities.supportsDataBreakpoints, true,
+        'data breakpoints cannot be armed, so the capability must stay off');
+      assert.strictEqual(capabilities.supportsRestartRequest, false);
+      assert.strictEqual(capabilities.supportsBreakpointLocationsRequest, false);
+    } finally {
+      tracker.dispose();
+    }
+  });
+
+  test('edits survive a Prev that undoes an unrelated instruction', async () => {
+    const transcript = new DebugTranscript();
+    const tracker = vscode.debug.registerDebugAdapterTrackerFactory('venus', {
+      createDebugAdapterTracker: () => transcript.tracker()
+    });
+
+    // Line 9 "addi t4, t3, 0" is the instruction Prev has to undo.
+    vscode.debug.addBreakpoints([
+      new vscode.SourceBreakpoint(new vscode.Location(programUri, new vscode.Position(8, 0)))
+    ]);
+
+    try {
+      const started = await vscode.debug.startDebugging(undefined, {
+        type: 'venus',
+        request: 'launch',
+        name: 'CS61C edit and Prev coherence',
+        program,
+        stopOnEntry: true,
+        stopAtBreakpoints: true
+      });
+      assert.strictEqual(started, true, 'debug session should start');
+      await transcript.waitFor(stopped('entry'));
+
+      const session = vscode.debug.activeDebugSession;
+      assert.ok(session, 'a Venus debug session should be active');
+
+      let mark = transcript.mark();
+      await session!.customRequest('continue', { threadId: 1 });
+      await transcript.waitFor(stopped('breakpoint'), mark);
+
+      const scope = await integerScope(session!);
+      const slotReference = helpers.formatAddress(await readRegister(session!, scope, 'x05'));
+      const word = Buffer.from([0x2a, 0x11, 0x00, 0x00]);
+
+      // Execute the addi once, so Prev has an instruction to undo next.
+      mark = transcript.mark();
+      await session!.customRequest('step', { threadId: 1 });
+      await transcript.waitFor(stopped('step'), mark);
+      assert.strictEqual(await readRegister(session!, scope, 'x29'), 7, 't4 copied t3');
+
+      // Poke the register the addi reads and the data word the lw will read.
+      await session!.customRequest('setVariable', {
+        variablesReference: scope,
+        name: 'x28 (t3) ',
+        value: '0x2a'
+      });
+      await session!.customRequest('writeMemory', {
+        memoryReference: slotReference,
+        count: 4,
+        data: word.toString('base64')
+      });
+
+      // Prev undoes the addi only: it neither wrote t3 nor that memory word, so
+      // both pokes have to survive while t4 is restored.
+      mark = transcript.mark();
+      await session!.customRequest('stepBack', { threadId: 1 });
+      await transcript.waitFor(stopped('step'), mark);
+      assert.strictEqual(await readRegister(session!, scope, 'x29'), 0, 'Prev restores t4');
+      assert.strictEqual(await readRegister(session!, scope, 'x28'), 0x2a, 'the register poke is not undone');
+      const poked = await session!.customRequest('readMemory', { memoryReference: slotReference, count: 4 });
+      assert.deepStrictEqual(Buffer.from(poked.data, 'base64'), word, 'the memory poke is not undone');
+
+      // Editing stays available right after a Prev, and re-executing the
+      // instructions consumes both poked values.
+      const repoke = await session!.customRequest('setVariable', {
+        variablesReference: scope,
+        name: 'x28 (t3)',
+        value: '0x2a'
+      });
+      assert.strictEqual(repoke.value.toLowerCase(), '0x0000002a');
+
+      mark = transcript.mark();
+      await session!.customRequest('step', { threadId: 1 });
+      await transcript.waitFor(stopped('step'), mark);
+      assert.strictEqual(await readRegister(session!, scope, 'x29'), 0x2a, 'the re-executed add copies the poked t3');
+
+      mark = transcript.mark();
+      await session!.customRequest('step', { threadId: 1 });
+      await transcript.waitFor(stopped('step'), mark);
+      assert.strictEqual(await readRegister(session!, scope, 'x06'), 0x112a, 'the re-executed lw loads the poked word');
+
+      // A further Prev (of the lw) must restore the instruction's own effect
+      // without resurrecting or discarding the pokes: they never became part of
+      // an instruction's undo entry.
+      mark = transcript.mark();
+      await session!.customRequest('stepBack', { threadId: 1 });
+      await transcript.waitFor(stopped('step'), mark);
+      assert.strictEqual(await readRegister(session!, scope, 'x06'), 0, 'Prev restores t1');
+      assert.strictEqual(await readRegister(session!, scope, 'x28'), 0x2a, 'the register poke survives the second Prev');
+      const stillPoked = await session!.customRequest('readMemory', { memoryReference: slotReference, count: 4 });
+      assert.deepStrictEqual(Buffer.from(stillPoked.data, 'base64'), word, 'the memory poke survives the second Prev');
     } finally {
       tracker.dispose();
     }

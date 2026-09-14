@@ -22,7 +22,8 @@ this extension cannot influence the result. Scenario data reaches
 8. read and write the `.data` word a program loads (DAP `readMemory` /
    `writeMemory`), including a single byte write;
 9. verify that the written word is what the program's `lw` observes;
-10. reject memory writes while the program is running and accept reads;
+10. reject register and memory writes while the program is running and accept
+    reads;
 11. start an infinite program and pause it without terminating the session;
 12. confirm a paused program stops advancing and that `continue` resumes it
    without a synthetic stop event;
@@ -123,7 +124,12 @@ memory that `lw`/`sw` use. The adapter only writes while the program is paused
 and keeps Venus' immutable-text rule (`riscv-venus.mutableText`), so an edit can
 never change code the assembler marked immutable. Step Back is offered only as
 a single-instruction undo of the backend history; Reverse Continue stays
-unadvertised and rejected.
+unadvertised and rejected. Register and memory edits are not part of an
+instruction's undo entry, so they survive a Prev that rewinds an instruction
+which did not touch them, and a Prev that rewinds an instruction which did
+touch them rewinds that instruction's effect like any other. Data breakpoints
+are not advertised: `dataBreakpointInfo` never returns a `dataId`, so no data
+breakpoint could be armed.
 
 ## Native exit status reporting
 

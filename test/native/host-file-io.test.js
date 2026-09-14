@@ -194,9 +194,17 @@ function loadVenus(buildDirectory) {
         if (request === 'kotlin') { return kotlin; }
         return load.apply(this, arguments);
     };
+    // The browser Driver schedules a delayed UI/local-storage initialization from its singleton
+    // constructor. This acceptance harness needs only the simulator + host-file API, and letting
+    // that UI timer run later would require unrelated globals and leave a save interval alive.
+    // Suppress only timers created while the core module is being initialized, then immediately
+    // restore Node's real timer implementation for the actual tests.
+    const setTimeoutReal = global.setTimeout;
+    global.setTimeout = function () { return undefined; };
     try {
         return require(coreFile);
     } finally {
+        global.setTimeout = setTimeoutReal;
         Module._load = load;
     }
 }

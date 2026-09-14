@@ -41,10 +41,19 @@ jobs:
       - name: Type-check extension and acceptance tests
         run: npm run compile
 
+      - name: Locate the runner's preinstalled VS Code
+        shell: pwsh
+        run: |
+          $candidates = @(
+            'C:\Program Files\Microsoft VS Code\Code.exe',
+            'C:\Program Files (x86)\Microsoft VS Code\Code.exe'
+          )
+          $codePath = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          if (-not $codePath) { throw 'The Windows runner does not contain a VS Code installation.' }
+          "VSCODE_EXECUTABLE_PATH=$codePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Run real VS Code extension-host acceptance tests
         run: npm test
-        env:
-          VSCODE_VERSION: stable
 
       - name: Package VSIX
         run: npm run package

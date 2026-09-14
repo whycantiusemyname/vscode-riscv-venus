@@ -12,11 +12,15 @@ async function main() {
 		// Passed to --extensionTestsPath
 		const extensionTestsPath = path.resolve(__dirname, './suite/index');
 
-		// Download VS Code, unzip it and run the integration test
+		// Windows GitHub runners already include VS Code. Reusing that executable
+		// avoids the legacy test harness constructing an obsolete archive URL.
+		const vscodeExecutablePath = process.env.VSCODE_EXECUTABLE_PATH;
 		await runTests({
 			extensionDevelopmentPath,
 			extensionTestsPath,
-			version: process.env.VSCODE_VERSION || 'stable',
+			...(vscodeExecutablePath
+				? { vscodeExecutablePath }
+				: { version: process.env.VSCODE_VERSION || 'stable' }),
 			launchArgs: ['--disable-workspace-trust', '--skip-welcome']
 		});
 	} catch (err) {

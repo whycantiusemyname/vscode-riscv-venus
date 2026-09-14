@@ -27,40 +27,12 @@ import { Subject } from 'await-notify';
 
 const riscvAsmScheme = 'venus_asm';
 
-const regNames = new Map([
-	["0", "zero"],
-	["1", "ra"],
-	["2", "sp"],
-	["3", "gp"],
-	["4", "tp"],
-	["5", "t0"],
-	["6", "t1"],
-	["7", "t2"],
-	["8", "s0"],
-	["9", "s1"],
-	["10", "a0"],
-	["11", "a1"],
-	["12", "a2"],
-	["13", "a3"],
-	["14", "a4"],
-	["15", "a5"],
-	["16", "a6"],
-	["17", "a7"],
-	["18", "s2"],
-	["19", "s3"],
-	["20", "s4"],
-	["21", "s5"],
-	["22", "s6"],
-	["23", "s7"],
-	["24", "s8"],
-	["25", "s9"],
-	["26", "s10"],
-	["27", "s11"],
-	["28", "t3"],
-	["29", "t4"],
-	["30", "t5"],
-	["31", "t6"],
-]);
+// Label -> ABI name for the integer registers of the Variables view. The
+// labels are shown as "x05 (t0)" and the same table is used to resolve the ABI
+// names that CS61C programs are written with.
+const regNames = new Map(helpers.integerRegisterAbiNames.map(
+	(name, id) => [id.toString(), name] as [string, string]
+));
 
 function timeout(ms: number) {
 	return new Promise(resolve => setTimeout(resolve, ms));
@@ -95,6 +67,10 @@ export class VenusDebugSession extends LoggingDebugSession {
 
 	// we don't support multiple threads, so we can use a hardcoded ID for the default thread
 	private static _threadId = 1;
+	// Upper bound for a single memory request. VS Code asks for one page at a
+	// time, and Venus memory is a hash map, so an unbounded read would be a
+	// cheap way to hang the adapter.
+	private static readonly MAX_MEMORY_BYTES_PER_REQUEST = 4096;
 	// a Mock runtime (or debugger)
 	private _runtime: VenusRuntime;
 	private _variableHandles = new Handles<string>();
@@ -192,6 +168,11 @@ export class VenusDebugSession extends LoggingDebugSession {
 
 		// the adapter supports changing register values.
 		response.body.supportsSetVariable = true;
+
+		// the adapter implements the memory requests that VS Code's memory view
+		// (and the hex editor) uses to display and edit simulator memory.
+		response.body.supportsReadMemoryRequest = true;
+		response.body.supportsWriteMemoryRequest = true;
 
 		// make VS Code to use 'evaluate' when hovering over source
 		response.body.supportsEvaluateForHovers = true;
@@ -431,57 +412,116 @@ export class VenusDebugSession extends LoggingDebugSession {
 	}
 
 	protected setVariableRequest(response: DebugProtocol.SetVariableResponse, args: DebugProtocol.SetVariableArguments, request?: DebugProtocol.Request): void {
-		if (args.name.startsWith("x")) {
-			let format = workspace.getConfiguration('riscv-venus').get('variableFormat');
-			var parsedInt = NaN;
+		// The names come from the Variables view, which labels integer
+		// registers "x05 (t0)   ", float registers "f05" and CSRs "mstatus ".
+		const format = workspace.getConfiguration('riscv-venus').get<string>('variableFormat');
+		const register = helpers.parseRegisterName(args.name);
 
-			if (format === "binary") {
-				parsedInt = parseInt(args.value, 2);
-			} else if (format === "ascii") {
-				parsedInt = args.value.charCodeAt(0);
-			} else {
-				parsedInt = parseInt(args.value);
-			}
-
-			if (Number.isInteger(parsedInt)) {
-				this._runtime.setRegister(parseInt(args.name.replace(new RegExp("\s(.*)", "i"), "").replace("x", "")), parsedInt);
-			} else {
+		if (register !== undefined && register.kind === 'integer') {
+			const parsedInt = helpers.parseVenusValue(args.value, format);
+			if (parsedInt === undefined) {
 				response.success = false;
-				response.message = "The specified value for register could not be interpreted as an integer";
-			}
-		} else if (args.name.startsWith("f")) {
-			if (!isNaN(parseFloat(args.value))) {
-				this._runtime.setFRegister(parseInt(args.name.replace("f", "")), parseFloat(args.value));
+				response.message = `The specified value '${args.value}' for the register could not be interpreted as an integer in the '${format}' number format`;
 			} else {
+				this._runtime.setRegister(register.id, parsedInt);
+				// Report the value that the simulator really holds, so editing
+				// x0 (which the ISA hardwires to zero) shows the truth.
+				response.body = { value: this.getFormatFunction()(this._runtime.getRegister(register.id).value) };
+			}
+		} else if (register !== undefined) {
+			const parsedFloat = parseFloat(args.value);
+			if (isNaN(parsedFloat)) {
 				response.success = false;
-				response.message = "The specified value for register could not be interpreted as an float";
-			}
-		} else if (args.name.startsWith("m")) {
-			let format = workspace.getConfiguration('riscv-venus').get('variableFormat');
-			var parsedInt = NaN;
-
-			if (format === "binary") {
-				parsedInt = parseInt(args.value, 2);
-			} else if (format === "ascii") {
-				parsedInt = args.value.charCodeAt(0);
+				response.message = `The specified value '${args.value}' for the register could not be interpreted as a float`;
 			} else {
-				parsedInt = parseInt(args.value);
+				this._runtime.setFRegister(register.id, parsedFloat);
+				response.body = { value: this.getFloatFormatFunction()(this._runtime.getFRegister(register.id).value) };
 			}
-
-			if (Number.isInteger(parsedInt)) {
-				let name = args.name.split(/ /)
-				if (name != null) {
-					this._runtime.setCsrRegisterByName(name[0], parsedInt);					
-				}				
-			} else {
+		} else if (this.getCsrName(args.name) !== undefined) {
+			const csr = this.getCsrName(args.name)!;
+			const parsedInt = helpers.parseVenusValue(args.value, format);
+			if (parsedInt === undefined) {
 				response.success = false;
-				response.message = "The specified value for register could not be interpreted as an integer";
+				response.message = `The specified value '${args.value}' for the register could not be interpreted as an integer in the '${format}' number format`;
+			} else {
+				this._runtime.setCsrRegisterByName(csr, parsedInt);
+				response.body = { value: this.getFormatFunction()(this._runtime.getCsrRegisterByName(csr)) };
 			}
+		} else {
+			response.success = false;
+			response.message = `'${args.name}' is not a writable register: only integer registers (x0-x31 or their ABI names) and float registers (f0-f31) can be changed`;
 		}
 		this.sendResponse(response);
 		if (response.success) {
 			this.sendEvent(new StoppedEvent('setVariable', VenusDebugSession._threadId));
 		}
+	}
+
+	/**
+	 * Reads bytes of the simulated memory. This is the request behind VS
+	 * Code's memory/hex view. Venus addresses memory by byte (little endian),
+	 * so the returned bytes are exactly the bytes `lw`/`sw` operate on.
+	 */
+	protected readMemoryRequest(response: DebugProtocol.ReadMemoryResponse, args: DebugProtocol.ReadMemoryArguments, request?: DebugProtocol.Request): void {
+		const address = helpers.parseMemoryAddress(args.memoryReference, args.offset);
+		const count = Math.floor(args.count);
+		if (address === undefined) {
+			response.success = false;
+			response.message = `Cannot interpret '${args.memoryReference}' as a memory address`;
+		} else if (!Number.isFinite(count) || count < 0) {
+			response.success = false;
+			response.message = `Cannot read '${args.count}' bytes of memory`;
+		} else {
+			const readable = Math.min(count, VenusDebugSession.MAX_MEMORY_BYTES_PER_REQUEST);
+			const body: { address: string, data: string, unreadableBytes?: number } = {
+				address: helpers.formatAddress(address),
+				data: this._runtime.readMemoryBytes(address, readable).toString('base64'),
+			};
+			if (readable < count) {
+				// The protocol uses this to tell the client where memory stops.
+				body.unreadableBytes = count - readable;
+			}
+			response.body = body;
+		}
+		this.sendResponse(response);
+	}
+
+	/**
+	 * Writes bytes of the simulated memory, i.e. the memory view's edit path.
+	 * Writes are byte granular so that editing a single byte works, and they
+	 * are visible to the program: a word written here is the value the next
+	 * `lw` from the same address returns.
+	 */
+	protected writeMemoryRequest(response: DebugProtocol.WriteMemoryResponse, args: DebugProtocol.WriteMemoryArguments, request?: DebugProtocol.Request): void {
+		const address = helpers.parseMemoryAddress(args.memoryReference, args.offset);
+		const data = Buffer.from(args.data === undefined ? '' : args.data, 'base64');
+
+		if (address === undefined) {
+			response.success = false;
+			response.message = `Cannot interpret '${args.memoryReference}' as a memory address`;
+		} else if (data.length === 0) {
+			response.success = false;
+			response.message = 'No bytes to write';
+		} else if (this._runtime.isRunning()) {
+			response.success = false;
+			response.message = 'Memory can only be edited while the program is paused';
+		} else if (!this._runtime.canWriteMemoryAt(address, data.length)) {
+			response.success = false;
+			response.message = `The text segment is immutable (riscv-venus.mutableText is disabled), so '${helpers.formatAddress(address)}' cannot be written`;
+		} else {
+			response.body = {
+				offset: 0,
+				bytesWritten: this._runtime.writeMemoryBytes(address, data),
+			};
+		}
+		this.sendResponse(response);
+	}
+
+	/** Resolves a CSR name as it appears in the "CSR" scope (e.g. "mstatus "). */
+	private getCsrName(name: string): string | undefined {
+		const candidate = name.trim().split(/\s+/)[0];
+		if (candidate.length === 0) { return undefined; }
+		return this._runtime.getCsrRegisterIdByName(candidate) !== -1 ? candidate : undefined;
 	}
 
 	protected continueRequest(response: DebugProtocol.ContinueResponse, args: DebugProtocol.ContinueArguments): void {

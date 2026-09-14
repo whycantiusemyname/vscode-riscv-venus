@@ -17,27 +17,28 @@ this extension cannot influence the result. Scenario data reaches
 4. continue to a verified source breakpoint in the imported `src/abs.s`;
 5. confirm the stack frame points to the imported source and expected line;
 6. expose integer registers and modify `t0` through DAP `setVariable`;
-7. start an infinite program and pause it without terminating the session;
-8. confirm a paused program stops advancing and that `continue` resumes it
+7. verify that the modified register is read back and consumed by the next
+   instruction;
+8. read and write the `.data` word a program loads (DAP `readMemory` /
+   `writeMemory`), including a single byte write;
+9. verify that the written word is what the program's `lw` observes;
+10. reject memory writes while the program is running and accept reads;
+11. start an infinite program and pause it without terminating the session;
+12. confirm a paused program stops advancing and that `continue` resumes it
    without a synthetic stop event;
-9. confirm the launch `args` reach the program as `argv` (`a0` = argc,
+13. confirm the launch `args` reach the program as `argv` (`a0` = argc,
    `a1` = argv) and that the launch `cwd` (default: the directory containing
    the program) is the working directory the runtime reports;
-10. package the exact accepted commit as a VSIX artifact.
+14. package the exact accepted commit as a VSIX artifact.
 
 The adapter exposes `venus/runtimeInfo` for these checks: it returns the entry
 file, the program arguments and the effective working directory the runtime was
 initialised with. The `cwd` launch attribute is forwarded to the runtime, where
-the host-disk bridge is expected to consume it; relative program paths are
-resolved against it.
+the host-disk bridge consumes it; relative program paths are resolved against it.
 
 The course JAR remains authoritative for calling-convention checking,
 memcheck, file-I/O error behavior, and exit-code tests. This extension does not
 claim to replace `venus.jar -cc`, `venus.jar -mc`, or the Project 2 test suite.
-Step Back and editable memory are not advertised: the bundled backend exposes
-partial undo primitives and a read-only memory view, but neither currently has
-the end-to-end state guarantees needed for a truthful claim.
-
 ## Differential acceptance against the pinned course JAR
 
 `scripts/ci/venus-course-parity.js` (fixtures under
@@ -113,3 +114,13 @@ The debugger side is already wired up:
 assembling and disables it when the runtime stops, both behind `typeof` guards, so an unpatched
 core is unaffected. `node test/native/host-file-io-wiring.test.js` is the static check for that
 wiring.
+
+Register and memory editing are advertised because both are wired end to end:
+`setVariable` writes the integer, float and CSR registers the simulator holds
+(the value in the response is the value read back from the simulator), and
+`readMemory`/`writeMemory` operate on the same byte addressed, little endian
+memory that `lw`/`sw` use. The adapter only writes while the program is paused
+and keeps Venus' immutable-text rule (`riscv-venus.mutableText`), so an edit can
+never change code the assembler marked immutable. Step Back is offered only as
+a single-instruction undo of the backend history; Reverse Continue stays
+unadvertised and rejected.

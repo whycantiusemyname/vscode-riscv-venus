@@ -174,9 +174,9 @@ Proj2 `src/utils.s:5-18` 显式定义课程使用的全部编号：
 | 4 | step / stepOver / stepOut / run / pause | `venus-reference:311-316` | `venusRuntime.ts:398-453`；`venusDebug.ts:480-520` | ✅ |
 | 5 | **step back（Prev）** | `venus-reference:314`；Lab3/4 教学动作 | `venusRuntime.ts:398-406` 调 `driver.undo()` + `_stackHistory`；DAP `supportsStepBack=true`（`venusDebug.ts:198`）、`stepBackRequest`（`:528-531`） | 🟡 已接线，受 `maxHistory` 限制，端到端未验收；且与 `CS61C-ACCEPTANCE.md` 自述「Step Back 不advertised」**文档漂移** |
 | 6 | 寄存器查看 | `venus-reference:318` | `venusRuntime.ts:237-293`（int/float/CSR） | ✅ |
-| 7 | 寄存器修改 | `venus-reference:320` | `venusRuntime.ts:341-390`；DAP `supportsSetVariable=true`（`venusDebug.ts:192`） | ✅ |
-| 8 | **内存查看** | `venus-reference:318,321-322` | `memoryui/memoryUI.ts` + `venusRuntime.ts:740` | 🟡 只读、无 Jump-to 等价物 |
-| 9 | **内存修改** | `venus-reference:320`（poke） | 插件无任何 `storeWord/storeByte/...` 调用（仅 `resetMemory`/`update`） | ❌ 后端有原语（`Driver.kt:323-332`），前端未接线 |
+| 7 | 寄存器修改 | `venus-reference:320` | DAP `supportsSetVariable=true`；`venusRuntime.setRegister/setFRegister/setCsrRegisterByName`；`venusHelpers.parseRegisterName` 接受 `x05 (t0)   `/`x5`/`t0`，`parseVenusValue` 对齐后端 `userStringToInt`（`0x`/`0b`/字符字面量/当前显示进制）；响应回读模拟器真实值 | ✅ 写入立即回读且被后续指令消费（`src/test/suite/editing.test.ts`） |
+| 8 | **内存查看** | `venus-reference:318,321-322` | DAP `supportsReadMemoryRequest=true` → `VenusRuntime.readMemoryBytes` → `driver.loadByte`；`memoryui/memoryUI.ts` 仍走同一字节源 | ✅ 字节寻址/小端，返回真实 `lw` 所见字节 |
+| 9 | **内存修改** | `venus-reference:320`（poke） | DAP `supportsWriteMemoryRequest=true` → `VenusRuntime.writeMemoryBytes` → `driver.storeByte` 并 `MemoryUI.update()` 刷新；运行中拒绝写入，`mutableText=false` 时拒绝改写 text（对齐 `storeWordwCache` 的 StoreError） | ✅ 字节粒度，写入影响后续 `lw`（`editing.test.ts` 断言） |
 | 10 | 程序 CLI 参数 | `unittests.py:602-612`；`venus-reference:439-458` | `frontendAPI.setArgs` → `Driver.kt:547-550`；`launch.json` 的 `args` | 🟡 argv/argc 顺序存在文档矛盾（`:406` vs `:445`），需实测 |
 | 11 | stdout 一致 | `unittests.py:681` | `ex: "Exited with error code N"`（`Driver.kt:526-531`）→ 终端捕获 | 🟡 未与 JAR 逐字比对 |
 | 12 | stderr 干净（仅 `Found 0 warnings!`） | `framework.py:550-553` | 无对应处理/嗅探 | ❌ |
@@ -244,7 +244,8 @@ VS Code 内（`proj2/.vscode/launch.json`）：
 | 行 4 | Step / Step Over / Continue / Pause 各一次 |
 | 行 5 | Debug Console 或 Prev 按钮回退一条 |
 | 行 6/7 | Variables 面板读改 `t0`；Memory 视图读地址 |
-| 行 9/13 | Memory 写入一个 word 并回读；记录退出码（当前预期失败） |
+| 行 9 | Memory 写入一个 word/字节并回读，且程序随后的 `lw` 读到该值（`editing.test.ts`） |
+| 行 13 | 记录退出码（当前预期失败：未通过 DAP 上报） |
 | 行 14 | `bash test.sh test_read_matrix`（当前预期失败：VFS 不落盘） |
 | 行 15/16/17/18 | `bash test.sh test_abs` 带 `-cc`、`-mc`、coverage（当前预期失败） |
 

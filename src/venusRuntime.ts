@@ -461,6 +461,69 @@ export class VenusRuntime extends EventEmitter {
 		simulator.driver.setCsrRegisterByName(name, twoComplementInt);
 	}
 
+	/** True while the simulator runs, i.e. while its state must not be edited. */
+	public isRunning(): boolean {
+		return simulator.driver.currentlyRunning();
+	}
+
+	/**
+	 * Exclusive end of the assembled text segment, or undefined when nothing
+	 * has been assembled yet.
+	 */
+	public getTextEnd(): number | undefined {
+		let textEnd: number | undefined = undefined;
+		this.pcToAssemblyLine.forEach(line => {
+			const end = line.pc + 4;
+			if (textEnd === undefined || end > textEnd) {
+				textEnd = end;
+			}
+		});
+		return textEnd;
+	}
+
+	/** Whether Venus is allowed to overwrite the text segment. */
+	public isMutableText(): boolean {
+		return simulator.driver.simSettings.mutableText !== false;
+	}
+
+	/**
+	 * Mirrors Venus' immutable-text rule for writes that come from the
+	 * debugger: the text segment may only be changed while the text is mutable.
+	 */
+	public canWriteMemoryAt(address: number, byteCount: number): boolean {
+		if (this.isMutableText()) { return true; }
+		const textEnd = this.getTextEnd();
+		return textEnd === undefined || !helpers.overlapsImmutableText(textEnd, address, byteCount);
+	}
+
+	/**
+	 * Reads raw bytes from the simulator memory. Venus memory is byte addressed
+	 * and little endian, so these bytes are exactly the bytes that `lw`/`sw`
+	 * operate on.
+	 */
+	public readMemoryBytes(address: number, byteCount: number): Buffer {
+		const count = Math.max(0, Math.floor(byteCount));
+		const bytes = Buffer.alloc(count);
+		for (let i = 0; i < count; i++) {
+			bytes[i] = simulator.driver.loadByte((address + i) | 0) & 0xff;
+		}
+		return bytes;
+	}
+
+	/**
+	 * Writes raw bytes into the simulator memory (byte granular, little
+	 * endian), then refreshes the memory view.
+	 *
+	 * @returns the number of bytes written
+	 */
+	public writeMemoryBytes(address: number, data: Buffer): number {
+		for (let i = 0; i < data.length; i++) {
+			simulator.driver.storeByte((address + i) | 0, data[i]);
+		}
+		this.updateMemory();
+		return data.length;
+	}
+
 	/**
 	 * Sets if the runtime should stop at Breakpoints
 	 * @param value If true the runtime stops at Breakpoints

@@ -1,3 +1,12 @@
+## Unreleased
+* Edit registers and memory through the native debugger: `setVariable` writes
+  integer/float/CSR registers and `readMemory`/`writeMemory` read and write the
+  byte addressed, little endian simulator memory that `lw`/`sw` use
+* Accept Venus literal values (`0x1f`, `0b101`, `'a'`) and ABI register names
+  (`t0`) when editing, and report the value read back from the simulator
+* Refresh the Memory view after a debugger write; refuse writes while the
+  program runs or into an immutable text segment
+
 ## 1.9.1
 * Add binary format to memory view
 * Add option for selecting number of columns in memory

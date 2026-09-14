@@ -128,7 +128,16 @@ function installBrowserGlobals() {
     let win = null;
     try {
         const jsdom = require('jsdom');
-        win = new jsdom.JSDOM('<!DOCTYPE html>').window;
+        // Use the same HTML fixture as src/runtime/fakeDOM.ts. Driver immediately casts several
+        // looked-up elements (notably #sv) to concrete DOM classes, so an empty JSDOM is not an
+        // equivalent bootstrap even when window/document themselves exist.
+        const fakeHtmlSource = fs.readFileSync(
+            path.join(__dirname, '..', '..', 'src', 'runtime', 'fake.index.html.ts'), 'utf8');
+        const firstTick = fakeHtmlSource.indexOf('`');
+        const lastTick = fakeHtmlSource.lastIndexOf('`');
+        assert.ok(firstTick >= 0 && lastTick > firstTick, 'could not read the extension fake DOM fixture');
+        const html = fakeHtmlSource.slice(firstTick + 1, lastTick);
+        win = new jsdom.JSDOM('<!DOCTYPE html><body>' + html + '</body>').window;
     } catch (e) {
         win = null;
     }

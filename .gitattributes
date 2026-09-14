@@ -1,0 +1,3 @@
+# Patches applied with `git apply` (test/native/apply-host-file-io-patches.ps1) must keep the
+# exact bytes they were verified with, so they get no end-of-line conversion here.
+test/native/patches/*.patch -text

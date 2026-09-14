@@ -510,6 +510,14 @@ suite('CS61C Project 2 acceptance', () => {
       assert.strictEqual(runtimeInfo.workingDirectory, comparablePath(fixtureRoot),
         'the launch cwd must be propagated to the runtime');
 
+      // The host file bridge must follow the launch cwd, not the program directory.
+      const hostFileIO = runtimeInfo.hostFileIO;
+      assert.ok(hostFileIO, 'runtimeInfo must report the host file I/O state');
+      if (hostFileIO.enabled) {
+        assert.strictEqual(hostFileIO.workingDirectory, path.resolve(fixtureRoot),
+          'host file I/O must be enabled for the launch cwd');
+      }
+
       // The simulated program observes argc in a0 and the argv pointer in a1.
       const argc = parseInt((await registerValue(session!, 'Integer', 'x10')).replace(/^0x/i, ''), 16);
       assert.strictEqual(argc, programArguments.length + 1, 'a0 must hold argc (program name plus arguments)');
@@ -547,6 +555,10 @@ suite('CS61C Project 2 acceptance', () => {
       const runtimeInfo = await session!.customRequest('venus/runtimeInfo');
       assert.strictEqual(runtimeInfo.workingDirectory, comparablePath(path.dirname(program)),
         'the working directory must default to the program directory');
+      if (runtimeInfo.hostFileIO?.enabled) {
+        assert.strictEqual(runtimeInfo.hostFileIO.workingDirectory, path.dirname(program),
+          'host file I/O must default to the program directory');
+      }
     } finally {
       tracker.dispose();
     }

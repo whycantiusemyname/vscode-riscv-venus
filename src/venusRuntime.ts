@@ -105,6 +105,8 @@ export class VenusRuntime extends EventEmitter {
 	// through the adapter instead of re-reading the shared fake DOM.
 	private _programArguments: string[] = [];
 	private _workingDirectory: string | undefined;
+	private _hostFileIOEnabled = false;
+	private _hostFileWorkingDirectory: string | undefined;
 
 	// Exit status of the program under debug. It is latched when the simulator
 	// reports that the program finished, and cleared for every new assemble so
@@ -145,18 +147,26 @@ export class VenusRuntime extends EventEmitter {
 			// defaults to the program directory: that is the directory the
 			// course test-src drivers expect relative paths in.
 			this._programArguments = programArgs.slice();
-			this.setWorkingDirectory(workingDirectory ?? dirname(fpath));
+			// One effective working directory drives both the reported state and the
+			// host file bridge: an explicit launch cwd must not be replaced by the
+			// program directory.
+			const effectiveWorkingDirectory = workingDirectory ?? dirname(fpath);
+			this.setWorkingDirectory(effectiveWorkingDirectory);
 			simulator.frontendAPI.setArgs(this._programArguments);
 			let text: string = readFileSync(fpath).toString();
 			// Feed Venus the same canonical path we use for source maps. On Windows
 			// this also normalizes an uppercase drive (C:) to the drive form handled
 			// by the legacy VFS when resolving relative .import directives.
 			let posixPath = helpers.canonicalSourcePath(fpath);
-			// Project 2 programs read and write real files (ecalls 13/14/15/16) and .import files
-			// live next to the program, so point the core at that directory before assembling.
-			this.enableHostFileIO(fpath);
+			// Project 2 programs read and write real files (ecalls 13/14/15/16) relative to the
+			// working directory, so point the core at it before assembling (relative .import
+			// directives are resolved during assembly as well).
+			this.enableHostFileIO(effectiveWorkingDirectory);
 			var[success, error, warnings] = simulator.driver.externalAssemble(text, posixPath, fName);
 			if (!success) {
+				// The session is about to terminate; do not leave the shared driver in
+				// host file mode pointing at a program that never ran.
+				this.disableHostFileIO();
 				VenusRenderer.getInstance().showErrorWithPopup(error);
 				return false;
 			}
@@ -171,6 +181,9 @@ export class VenusRuntime extends EventEmitter {
 			this.reapplyBreakpoints();
 			return true;
 		} catch (e: unknown) {
+			// Host file mode is switched on before assembling, so a failure here has
+			// to restore the default backend as well.
+			this.disableHostFileIO();
 			VenusRenderer.getInstance().showErrorWithPopup(e);
 			return false;
 		}
@@ -184,16 +197,17 @@ export class VenusRuntime extends EventEmitter {
 	 * are looked up defensively, so a core without them keeps its previous behaviour: ecalls
 	 * 13/14/15/16 and .import stay on the in-memory VFS.
 	 */
-	private enableHostFileIO(fpath: string) {
+	private enableHostFileIO(workingDirectory: string) {
 		const driver: any = simulator.driver;
 		if (typeof driver.setHostFileCwd !== 'function' || typeof driver.enableHostFileIO !== 'function') {
 			return;
 		}
-		const cwd = dirname(fpath);
-		if (cwd) {
-			driver.setHostFileCwd(cwd);
+		if (workingDirectory) {
+			driver.setHostFileCwd(workingDirectory);
 		}
 		driver.enableHostFileIO(true);
+		this._hostFileIOEnabled = true;
+		this._hostFileWorkingDirectory = workingDirectory;
 	}
 
 	/** Restores the default VFS file backend; harmless on a core without the host file API. */
@@ -202,6 +216,8 @@ export class VenusRuntime extends EventEmitter {
 		if (typeof driver.enableHostFileIO === 'function') {
 			driver.enableHostFileIO(false);
 		}
+		this._hostFileIOEnabled = false;
+		this._hostFileWorkingDirectory = undefined;
 	}
 
 	private applySettings(settings: VenusSettings) {
@@ -319,20 +335,24 @@ export class VenusRuntime extends EventEmitter {
 	}
 
 	/**
+	 * The host file I/O state the core was actually configured with. `enabled`
+	 * stays false on a core without the patched host file API.
+	 */
+	public getHostFileIOState(): { enabled: boolean; workingDirectory: string | undefined } {
+		return { enabled: this._hostFileIOEnabled, workingDirectory: this._hostFileWorkingDirectory };
+	}
+
+	/**
 	 * Sets the working directory used for relative path resolution. The value is
 	 * canonicalised like source paths so it can be compared with the paths the
 	 * simulator reports.
 	 */
 	public setWorkingDirectory(dir: string): void {
 		if (!dir) { return; }
+		// Canonical form only: this is what the adapter reports. The core is
+		// configured separately through enableHostFileIO(), which forwards the
+		// native working directory to setHostFileCwd.
 		this._workingDirectory = helpers.canonicalSourcePath(dir);
-		try {
-			// Publish the value on the driver so the (separately owned) host file
-			// bridge can pick it up without another plumbing channel.
-			(simulator.driver as any).workingDirectory = this._workingDirectory;
-		} catch (e) {
-			// The driver is a compiled Kotlin object; this is best effort only.
-		}
 	}
 
 	public useRegister(id: number) {

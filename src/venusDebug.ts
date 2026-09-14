@@ -766,7 +766,8 @@ export class VenusDebugSession extends LoggingDebugSession {
 			response.body = {
 				program: this._runtime.sourceFile,
 				programArguments: this._runtime.getProgramArguments(),
-				workingDirectory: this._runtime.getWorkingDirectory()
+				workingDirectory: this._runtime.getWorkingDirectory(),
+				hostFileIO: this._runtime.getHostFileIOState()
 			};
 			this.sendResponse(response);
 			return;

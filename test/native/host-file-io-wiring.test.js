@@ -47,11 +47,15 @@ const stopBody = memberBody('public stop()');
 const tests = [];
 function test(name, fn) { tests.push({ name: name, fn: fn }); }
 
-test('assemble() points the core at the program directory and enables host file mode', () => {
-    assert.ok(assembleBody.indexOf('this.enableHostFileIO(fpath)') !== -1,
-        'assemble() must call this.enableHostFileIO(fpath)');
-    assert.ok(assembleBody.indexOf('this.enableHostFileIO(fpath)') < assembleBody.indexOf('externalAssemble('),
+test('assemble() points the core at the effective working directory', () => {
+    assert.ok(assembleBody.indexOf('const effectiveWorkingDirectory = workingDirectory ?? dirname(fpath)') !== -1,
+        'an explicit launch cwd must win over the program directory');
+    assert.ok(assembleBody.indexOf('this.enableHostFileIO(effectiveWorkingDirectory)') !== -1,
+        'assemble() must call this.enableHostFileIO(effectiveWorkingDirectory)');
+    assert.ok(assembleBody.indexOf('this.enableHostFileIO(effectiveWorkingDirectory)') < assembleBody.indexOf('externalAssemble('),
         'host file mode must be enabled before assembling, because .import resolves during assembly');
+    assert.ok(assembleBody.indexOf('this.setWorkingDirectory(effectiveWorkingDirectory)') !== -1,
+        'the reported working directory must be the same effective directory');
 });
 
 test('the opt in is guarded and drives both entry points of the core API', () => {
@@ -61,8 +65,15 @@ test('the opt in is guarded and drives both entry points of the core API', () =>
         'enableHostFileIO must be looked up defensively');
     assert.ok(/typeof driver[\s\S]*?return;/.test(enableBody),
         'an unpatched core must be left alone');
-    assert.ok(enableBody.indexOf('driver.setHostFileCwd(cwd)') !== -1, 'the cwd must be forwarded');
+    assert.ok(enableBody.indexOf('driver.setHostFileCwd(workingDirectory)') !== -1,
+        'the effective working directory must be forwarded');
     assert.ok(enableBody.indexOf('driver.enableHostFileIO(true)') !== -1, 'host file mode must be enabled');
+});
+
+test('a failed assemble resets host file mode', () => {
+    const failure = assembleBody.slice(assembleBody.indexOf('if (!success)'));
+    assert.ok(failure.indexOf('this.disableHostFileIO()') !== -1,
+        'a failed assemble must not leave host file mode enabled with a stale directory');
 });
 
 test('stop() resets host file mode for the next session', () => {

@@ -80,11 +80,22 @@ jobs:
       - name: Install JavaScript dependencies
         run: npm ci
 
+      - name: Apply binary-safe native host file I/O patches
+        shell: pwsh
+        run: |
+          ./test/native/apply-host-file-io-patches.ps1 -Check
+          ./test/native/apply-host-file-io-patches.ps1
+
       - name: Build Venus core and extension bundle
         run: npm run compileAll
 
       - name: Type-check extension and acceptance tests
         run: npm run compile
+
+      - name: Verify native Project 2 host file I/O
+        run: node test/native/host-file-io.test.js
+        env:
+          VENUS_REQUIRE_HOST_FILE_IO: '1'
 
       - name: Run headless CS61C course parity tests
         run: npm run test:course

@@ -33,10 +33,19 @@ jobs:
         run: chmod +x src/runtime/venus/gradlew
       - name: Install dependencies
         run: npm ci
+      - name: Apply binary-safe native host file I/O patches
+        shell: pwsh
+        run: |
+          ./test/native/apply-host-file-io-patches.ps1 -Check
+          ./test/native/apply-host-file-io-patches.ps1
       - name: Build Venus core and extension bundle
         run: npm run compileAll
       - name: Build extension
         run: npm run compile
+      - name: Verify native Project 2 host file I/O
+        run: node test/native/host-file-io.test.js
+        env:
+          VENUS_REQUIRE_HOST_FILE_IO: '1'
       - name: Package extension
         run: npm run package
       - name: prepare version string

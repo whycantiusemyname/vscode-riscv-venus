@@ -1,0 +1,275 @@
+import * as assert from 'assert';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+
+import {
+	buildVenusJarArgv,
+	formatCommandLine,
+	invocationForMode,
+	planVenusCourseRun,
+	quoteShellArg,
+	resolveWorkingDirectory,
+	selectProjectRoot,
+	VENUS_COURSE_MODES,
+	venusCourseModeDefinition,
+	venusJarCandidates
+} from '../../course/venusCourseArgs';
+import { firstExistingFile, locateVenusJar, resolveJavaExecutable } from '../../course/venusJarLocator';
+import { runVenusCourseProcess } from '../../course/venusCourseProcess';
+
+const JAR = path.join('C:', 'course fa24', 'projects', 'proj2-cs61classify', 'tools', 'venus.jar');
+const PROGRAM = path.join('C:', 'project with spaces', 'test-src', 'test_abs_one.s');
+
+function build(overrides: Partial<Parameters<typeof buildVenusJarArgv>[1]> = {}): string[] {
+	return buildVenusJarArgv(JAR, { program: PROGRAM, ...overrides }).javaArgs;
+}
+
+suite('Venus course JAR bridge', () => {
+	test('maps every contributed command to exactly one mode and flag set', () => {
+		const commands = VENUS_COURSE_MODES.map(definition => definition.command);
+		assert.deepStrictEqual(commands, [
+			'riscv-venus.course.run',
+			'riscv-venus.course.callingConvention',
+			'riscv-venus.course.memcheck',
+			'riscv-venus.course.memcheckVerbose'
+		]);
+		assert.strictEqual(commands.length, new Set(commands).size, 'command ids must be unique');
+
+		assert.deepStrictEqual(venusCourseModeDefinition('run').flags, {});
+		assert.deepStrictEqual(venusCourseModeDefinition('callingConvention').flags, { callingConvention: true });
+		assert.deepStrictEqual(venusCourseModeDefinition('memcheck').flags, { memcheck: true });
+		assert.deepStrictEqual(venusCourseModeDefinition('memcheckVerbose').flags, { memcheckVerbose: true });
+	});
+
+	test('builds a plain run argv with the JAR path kept as one argument', () => {
+		assert.deepStrictEqual(build(), ['-jar', JAR, PROGRAM]);
+	});
+
+	test('emits -cc for the calling convention check', () => {
+		assert.deepStrictEqual(build({ callingConvention: true }), ['-jar', JAR, '-cc', PROGRAM]);
+	});
+
+	test('emits -mc for memcheck and -mcv (never both) for verbose memcheck', () => {
+		assert.deepStrictEqual(build({ memcheck: true }), ['-jar', JAR, '-mc', PROGRAM]);
+		assert.deepStrictEqual(build({ memcheckVerbose: true }), ['-jar', JAR, '-mcv', PROGRAM]);
+		assert.deepStrictEqual(
+			build({ memcheck: true, memcheckVerbose: true }),
+			['-jar', JAR, '-mcv', PROGRAM],
+			'-mcv implies -mc, so -mc must be dropped'
+		);
+	});
+
+	test('drops -ahs when memcheck is active, because the JAR rejects the combination', () => {
+		assert.ok(!build({ memcheck: true, allowStackHeap: true }).includes('-ahs'));
+		assert.ok(build({ allowStackHeap: true }).includes('-ahs'));
+		assert.ok(build({ memcheckVerbose: true, allowStackHeap: true }).includes('-mcv'));
+	});
+
+	test('passes -ms for the Project 2 default and other values, including negative ones', () => {
+		assert.deepStrictEqual(build({ maxSteps: -1 }), ['-jar', JAR, '-ms', '-1', PROGRAM]);
+		assert.deepStrictEqual(build({ maxSteps: 1000 }), ['-jar', JAR, '-ms', '1000', PROGRAM]);
+		assert.deepStrictEqual(build(), ['-jar', JAR, PROGRAM], 'no maxSteps means no -ms flag');
+	});
+
+	test('passes program arguments positionally after the file, without a -- separator', () => {
+		assert.deepStrictEqual(
+			build({ programArgs: ['alpha', 'beta gamma', '-it'] }),
+			['-jar', JAR, PROGRAM, 'alpha', 'beta gamma', '-it']
+		);
+	});
+
+	test('keeps -wd and the working directory as separate argv entries so spaces survive', () => {
+		const workingDirectory = path.join('C:', 'projects', 'my project');
+		const javaArgs = build({ workingDirectory, passWorkingDirectoryFlag: true });
+		assert.deepStrictEqual(javaArgs, ['-jar', JAR, '-wd', workingDirectory, PROGRAM]);
+	});
+
+	test('places Venus flags before the file and the file before program args', () => {
+		const javaArgs = build({
+			callingConvention: true,
+			memcheckVerbose: true,
+			immutableText: true,
+			ecallOnlyExit: true,
+			maxSteps: 5,
+			workingDirectory: path.join('C:', 'wd with spaces'),
+			passWorkingDirectoryFlag: true,
+			programArgs: ['one']
+		});
+		assert.deepStrictEqual(javaArgs, [
+			'-jar', JAR,
+			'-cc', '-mcv', '-it', '-eoe', '-ms', '5',
+			'-wd', path.join('C:', 'wd with spaces'),
+			PROGRAM,
+			'one'
+		]);
+	});
+
+	test('defaults the working directory to the folder holding the .s file', () => {
+		assert.strictEqual(resolveWorkingDirectory(undefined, PROGRAM), path.dirname(path.resolve(PROGRAM)));
+		assert.strictEqual(resolveWorkingDirectory('', PROGRAM), path.dirname(path.resolve(PROGRAM)));
+		assert.strictEqual(resolveWorkingDirectory('C:\\wd', PROGRAM), 'C:\\wd');
+	});
+
+	test('quotes paths containing spaces for a shell round trip', () => {
+		const windows = quoteShellArg('C:\\project with spaces\\test.s', 'win32');
+		assert.strictEqual(windows, '"C:\\project with spaces\\test.s"');
+		assert.strictEqual(quoteShellArg('C:\\plain\\test.s', 'win32'), 'C:\\plain\\test.s');
+
+		const posix = quoteShellArg('/home/me/project with spaces/test.s', 'linux');
+		assert.strictEqual(posix, "'/home/me/project with spaces/test.s'");
+		assert.strictEqual(quoteShellArg('/home/me/plain/test.s', 'linux'), '/home/me/plain/test.s');
+	});
+
+	test('quotes embedded quotes without breaking the command line', () => {
+		assert.strictEqual(quoteShellArg('say "hi"', 'win32'), '"say ""hi"""');
+		assert.strictEqual(quoteShellArg("it's here", 'linux'), `'it'\\''s here'`);
+		assert.strictEqual(quoteShellArg('plain', 'linux'), 'plain');
+	});
+
+	test('renders a displayable command line that keeps spaced paths intact', () => {
+		const plan = planVenusCourseRun(JAR, { program: PROGRAM, callingConvention: true }, 'java');
+		assert.deepStrictEqual(plan.argv, ['java', ...plan.javaArgs]);
+		assert.ok(plan.commandLine.startsWith('java -jar '));
+		assert.ok(plan.commandLine.endsWith(quoteShellArg(PROGRAM)));
+	});
+
+	test('selects the deepest workspace folder that contains the program', () => {
+		const project2 = path.join('C:', 'CS61C', 'course-fa24', 'projects', 'proj2-cs61classify');
+		const workspaceRoot = path.join('C:', 'CS61C');
+		const program = path.join(project2, 'test-src', 'test_abs_one.s');
+
+		assert.strictEqual(selectProjectRoot(program, [workspaceRoot, project2]), project2);
+		assert.strictEqual(selectProjectRoot(program, [workspaceRoot]), workspaceRoot);
+		assert.strictEqual(selectProjectRoot(program, []), path.dirname(path.resolve(program)));
+		assert.strictEqual(selectProjectRoot(undefined, [workspaceRoot]), workspaceRoot);
+	});
+});
+
+suite('Venus course JAR discovery', () => {
+	test('prefers a configured JAR over the discovered layouts', () => {
+		const configured = path.join('C:', 'custom', 'venus.jar');
+		const candidates = venusJarCandidates({
+			configuredJarPath: configured,
+			programPath: PROGRAM,
+			workspaceRoots: [path.join('C:', 'CS61C')]
+		});
+		assert.strictEqual(candidates[0], path.resolve(configured));
+	});
+
+	test('resolves a relative configured JAR against each workspace root', () => {
+		const root = path.join('C:', 'CS61C');
+		const candidates = venusJarCandidates({
+			configuredJarPath: 'course-fa24/projects/proj2-cs61classify/tools/venus.jar',
+			programPath: PROGRAM,
+			workspaceRoots: [root]
+		});
+		assert.ok(candidates.includes(path.resolve(root, 'course-fa24/projects/proj2-cs61classify/tools/venus.jar')));
+	});
+
+	test('finds the Project 2 tools/venus.jar layout from a workspace root', () => {
+		const root = path.join('C:', 'CS61C');
+		const candidates = venusJarCandidates({ programPath: PROGRAM, workspaceRoots: [root] });
+		assert.ok(candidates.includes(path.join(root, 'tools', 'venus.jar')));
+		assert.ok(candidates.includes(path.join(root, 'course-fa24', 'projects', 'proj2-cs61classify', 'tools', 'venus.jar')));
+		assert.ok(candidates.includes(path.join(root, 'projects', 'proj2-cs61classify', 'tools', 'venus.jar')));
+		assert.strictEqual(candidates.length, new Set(candidates).size, 'candidates must be de-duplicated');
+	});
+
+	test('walks up from the assembly file when it is outside the workspaces', () => {
+		const root = path.join('C:', 'checkout');
+		const program = path.join(root, 'test-src', 'test_abs_one.s');
+		const candidates = venusJarCandidates({ programPath: program, workspaceRoots: [] });
+		assert.ok(candidates.includes(path.join(root, 'tools', 'venus.jar')));
+	});
+
+	test('locates a JAR that exists on disk and reports the probed paths', () => {
+		const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'venus-course-'));
+		try {
+			const toolsDir = path.join(tempRoot, 'course-fa24', 'projects', 'proj2-cs61classify', 'tools');
+			const jar = path.join(toolsDir, 'venus.jar');
+			fs.mkdirSync(toolsDir, { recursive: true });
+			fs.writeFileSync(jar, 'not a real jar');
+			const program = path.join(tempRoot, 'project with spaces', 'test-src', 'test.s');
+
+			const location = locateVenusJar({ programPath: program, workspaceRoots: [tempRoot] });
+			assert.strictEqual(location.jarPath, jar);
+			assert.ok(location.probed.includes(jar));
+		} finally {
+			fs.rmSync(tempRoot, { recursive: true, force: true });
+		}
+	});
+
+	test('returns no JAR but still reports candidates when nothing exists', () => {
+		const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'venus-course-empty-'));
+		try {
+			const location = locateVenusJar({
+				programPath: path.join(tempRoot, 'test.s'),
+				workspaceRoots: [tempRoot]
+			});
+			assert.strictEqual(location.jarPath, undefined);
+			assert.ok(location.probed.length > 0);
+			assert.strictEqual(firstExistingFile(location.probed), undefined);
+		} finally {
+			fs.rmSync(tempRoot, { recursive: true, force: true });
+		}
+	});
+
+	test('prefers an explicit java path, then JAVA_HOME, then java from PATH', () => {
+		assert.strictEqual(resolveJavaExecutable('/opt/jdk/bin/java', '/other/jdk'), '/opt/jdk/bin/java');
+		assert.strictEqual(
+			resolveJavaExecutable('', path.join('C:', 'jdk')),
+			path.join('C:', 'jdk', 'bin', process.platform === 'win32' ? 'java.exe' : 'java')
+		);
+		assert.strictEqual(resolveJavaExecutable(undefined, undefined), 'java');
+	});
+});
+
+suite('Venus course process runner', () => {
+	// The extension host runs inside Electron, so `process.execPath` only
+	// behaves like node when ELECTRON_RUN_AS_NODE is set.
+	const nodeEnv: NodeJS.ProcessEnv = { ...process.env, ELECTRON_RUN_AS_NODE: '1' };
+
+	test('preserves the exit code and the combined output of the child process', async () => {
+		const result = await runVenusCourseProcess(
+			process.execPath,
+			['-e', 'process.stdout.write("out line\\n"); process.stderr.write("err line\\n"); process.exit(7);'],
+			{ env: nodeEnv }
+		);
+		assert.strictEqual(result.exitCode, 7);
+		assert.ok(result.output.includes('out line'));
+		assert.ok(result.output.includes('err line'));
+	});
+
+	test('streams output chunks to the caller as they arrive', async () => {
+		let streamed = '';
+		const result = await runVenusCourseProcess(
+			process.execPath,
+			['-e', 'process.stdout.write("streamed");'],
+			{ env: nodeEnv, onOutput: chunk => { streamed += chunk; } }
+		);
+		assert.strictEqual(result.exitCode, 0);
+		assert.strictEqual(streamed, 'streamed');
+	});
+
+	test('runs in a working directory that contains spaces', async () => {
+		const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'venus course wd '));
+		try {
+			const result = await runVenusCourseProcess(
+				process.execPath,
+				['-e', 'process.stdout.write(process.cwd())'],
+				{ cwd: tempRoot, env: nodeEnv }
+			);
+			assert.strictEqual(result.exitCode, 0);
+			assert.strictEqual(fs.realpathSync(result.output.trim()), fs.realpathSync(tempRoot));
+		} finally {
+			fs.rmSync(tempRoot, { recursive: true, force: true });
+		}
+	});
+
+	test('rejects when the executable cannot be started', async () => {
+		await assert.rejects(
+			runVenusCourseProcess(path.join(os.tmpdir(), 'definitely-not-a-real-executable-12345'), [])
+		);
+	});
+});

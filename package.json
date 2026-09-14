@@ -86,6 +86,10 @@
 		"onDebug",
 		"onCommand:extension.riscv-venus.getProgramName",
 		"onCommand:riscv-venus.activate",
+		"onCommand:riscv-venus.course.run",
+		"onCommand:riscv-venus.course.callingConvention",
+		"onCommand:riscv-venus.course.memcheck",
+		"onCommand:riscv-venus.course.memcheckVerbose",
 		"onLanguage:riscv",
 		"workspaceContains:**/*.{s, S}"
 	],
@@ -136,6 +140,49 @@
 					"type": "boolean",
 					"default": false,
 					"description": "Only show registers used during execution (experimental)"
+				},
+				"riscv-venus.course.jarPath": {
+					"type": "string",
+					"default": "",
+					"markdownDescription": "Path to the CS61C course `venus.jar` (for example `course-fa24/projects/proj2-cs61classify/tools/venus.jar`). Relative paths are resolved against each workspace folder. When empty the extension searches `<root>/tools/venus.jar` and the Project 2 layout."
+				},
+				"riscv-venus.course.javaPath": {
+					"type": "string",
+					"default": "",
+					"description": "Path to the java executable used to run the course JAR. Empty uses JAVA_HOME, then java from PATH."
+				},
+				"riscv-venus.course.workingDirectory": {
+					"type": "string",
+					"default": "",
+					"description": "Working directory for the course JAR. Empty uses the folder of the .s file. When set, it is also passed to Venus as -wd."
+				},
+				"riscv-venus.course.programArgs": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"default": [],
+					"description": "Arguments passed to the simulated program (a0 = argc, a1 = argv). Venus receives them as simulatorArgs after the file name, matching framework.py."
+				},
+				"riscv-venus.course.maxSteps": {
+					"type": "integer",
+					"default": -1,
+					"description": "Maximum number of steps passed as -ms. Negative means no limit; the Project 2 framework uses -1."
+				},
+				"riscv-venus.course.immutableText": {
+					"type": "boolean",
+					"default": true,
+					"description": "Pass -it so the text segment cannot be modified. On by default, matching the Project 2 framework's --immutableText."
+				},
+				"riscv-venus.course.ecallOnlyExit": {
+					"type": "boolean",
+					"default": false,
+					"description": "Pass -eoe so the program only exits through an ecall."
+				},
+				"riscv-venus.course.allowStackHeap": {
+					"type": "boolean",
+					"default": false,
+					"description": "Pass -ahs to allow accesses between stack and heap. Ignored when -mc/-mcv is active because the JAR rejects that combination."
 				}
 			}
 		},
@@ -219,6 +266,26 @@
 					"light": "images/light/three-bars.svg",
 					"dark": "images/dark/three-bars.svg"
 				}
+			},
+			{
+				"command": "riscv-venus.course.run",
+				"title": "Venus Course: Run Current .s with course venus.jar",
+				"category": "Venus Course"
+			},
+			{
+				"command": "riscv-venus.course.callingConvention",
+				"title": "Venus Course: Calling Convention Check (-cc)",
+				"category": "Venus Course"
+			},
+			{
+				"command": "riscv-venus.course.memcheck",
+				"title": "Venus Course: Memcheck (-mc)",
+				"category": "Venus Course"
+			},
+			{
+				"command": "riscv-venus.course.memcheckVerbose",
+				"title": "Venus Course: Verbose Memcheck (-mcv)",
+				"category": "Venus Course"
 			}
 		],
 		"views": {

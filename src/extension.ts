@@ -18,6 +18,7 @@ import { MemoryUI } from './memoryui/memoryUI';
 import { venusTerminal } from './terminal/venusTerminal';
 import { VenusMenuProvider } from './menu/venusMenu';
 import { AssemblyView } from './assemblyView';
+import { registerVenusCourseCommands } from './course/venusCourseCommands';
 
 /*
  * The compile time flag 'runMode' controls how the debug adapter is run.
@@ -90,6 +91,10 @@ export function activate(context: vscode.ExtensionContext) {
 		// let document =  await vscode.workspace.openTextDocument(vscode.Uri.joinPath(context.extensionUri, 'src', 'documentation', 'manual.md'))
 		// vscode.window.showTextDocument(document, vscode.ViewColumn.Active, false)
 	}));
+
+	// Course checks that delegate to the authoritative CS61C venus.jar
+	// (-cc, -mc, -mcv, plus a plain run). See src/course/venusCourseCommands.ts.
+	registerVenusCourseCommands(context);
 
 	// This block makes sure that the Venus Options View is shown in the debugger
 	// See: https://stackoverflow.com/questions/61555532/conditional-view-contribution-with-vscode-extension-api

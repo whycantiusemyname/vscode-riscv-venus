@@ -11,6 +11,11 @@ on:
 permissions:
   contents: read
 
+env:
+  # Keep the extension host identical to ci.yml so a green Windows run means
+  # the same thing as a green Linux run instead of tracking "latest".
+  VSCODE_TEST_VERSION: '1.85.2'
+
 jobs:
   windows-build-and-accept:
     runs-on: windows-2022
@@ -79,7 +84,7 @@ jobs:
         run: |
           $archive = Join-Path $env:RUNNER_TEMP 'vscode-win32-x64.zip'
           $installDir = Join-Path $env:RUNNER_TEMP 'vscode-win32-x64'
-          Invoke-WebRequest -Uri 'https://update.code.visualstudio.com/latest/win32-x64-archive/stable' -OutFile $archive
+          Invoke-WebRequest -Uri "https://update.code.visualstudio.com/${env:VSCODE_TEST_VERSION}/win32-x64-archive/stable" -OutFile $archive
           Expand-Archive -LiteralPath $archive -DestinationPath $installDir
           $codePath = Join-Path $installDir 'Code.exe'
           if (-not (Test-Path -LiteralPath $codePath)) { throw 'The VS Code test host archive is invalid.' }

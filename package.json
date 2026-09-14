@@ -89,6 +89,15 @@
 		"onDebug",
 		"onCommand:extension.riscv-venus.getProgramName",
 		"onCommand:riscv-venus.activate",
+		"onCommand:riscv-venus.openAssembly",
+		"onCommand:riscv-venus.openDocumentation",
+		"onCommand:riscv-venus.openLedMatrixUI",
+		"onCommand:riscv-venus.openMemory",
+		"onCommand:riscv-venus.openRobotUI",
+		"onCommand:riscv-venus.openSettings",
+		"onCommand:riscv-venus.openSevenSegBoardUI",
+		"onCommand:riscv-venus.openTerminal",
+		"onCommand:riscv-venus.setVariableFormat",
 		"onCommand:riscv-venus.course.run",
 		"onCommand:riscv-venus.course.callingConvention",
 		"onCommand:riscv-venus.course.memcheck",
@@ -310,14 +319,6 @@
 					"when": "venus:showOptionsMenu",
 					"id": "riscv-venus.venusMenu",
 					"name": "Venus Options"
-				}
-			]
-		},
-		"menus": {
-			"view/title": [
-				{
-					"command": "riscv-venus.openAssembly",
-					"when": "view == venusAssembly"
 				}
 			]
 		},

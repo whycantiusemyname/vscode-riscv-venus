@@ -85,6 +85,8 @@ export class VenusRuntime extends EventEmitter {
 	private _usedRegisters = new SortedSet();
 
 	private _maximumLineNumber = new Map<string, number>();
+	private _activeBreakpointPcs = new Map<number, number>();
+	private _pauseRequested = false;
 
 	constructor() {
 		super();
@@ -109,25 +111,27 @@ export class VenusRuntime extends EventEmitter {
 		}
 	}
 
-	public assemble(fpath: string, fName: string, settings: VenusSettings) {
+	public assemble(fpath: string, fName: string, settings: VenusSettings, programArgs: string[] = []): boolean {
 		try {
 			this.applySettings(settings);
+			simulator.frontendAPI.setArgs(programArgs);
 			let text: string = readFileSync(fpath).toString();
 			let posixPath = helpers.toPosixPath(fpath);
 			var[success, error, warnings] = simulator.driver.externalAssemble(text, posixPath, fName);
 			if (!success) {
 				VenusRenderer.getInstance().showErrorWithPopup(error);
-				this.sendEvent("end");
-				return;
+				return false;
 			}
 			for (let warn of warnings.toArray()) {
 				VenusRenderer.getInstance().printWarning(warn.toString());
 			}
 
 			this.getAssemblyLines();
+			this.reapplyBreakpoints();
+			return true;
 		} catch (e: unknown) {
 			VenusRenderer.getInstance().showErrorWithPopup(e);
-			this.sendEvent('end');
+			return false;
 		}
 	}
 
@@ -161,16 +165,20 @@ export class VenusRuntime extends EventEmitter {
 	private getAssemblyLines(){
 		this.pcToAssemblyLine.clear();
 		this.sourceLineToPc.clear();
+		this._maximumLineNumber.clear();
+		// externalAssemble creates a new Simulator, whose breakpoint set is empty.
+		this._activeBreakpointPcs.clear();
 		let instructions = simulator.driver.getInstructions();
 
 		for (let i = 0; i < instructions.length; i++) {
-			const currentMaximumLine = this._maximumLineNumber.get(instructions[i].sourceFile);
+			const sourcePath = helpers.canonicalSourcePath(instructions[i].sourceFile);
+			const currentMaximumLine = this._maximumLineNumber.get(sourcePath);
 			if(!currentMaximumLine || currentMaximumLine < instructions[i].line) {
-				this._maximumLineNumber.set(instructions[i].sourceFile ,instructions[i].line);
+				this._maximumLineNumber.set(sourcePath, instructions[i].line);
 			}
-			let assemblyLine: AssemblyLine = {pc: instructions[i].pc, mCode: instructions[i].mcode, basicCode: instructions[i].basicCode, assemblyViewLine: 0, sourceLine: instructions[i].line, sourcePath: instructions[i].sourceFile};
+			let assemblyLine: AssemblyLine = {pc: instructions[i].pc, mCode: instructions[i].mcode, basicCode: instructions[i].basicCode, assemblyViewLine: 0, sourceLine: instructions[i].line, sourcePath};
 			this.pcToAssemblyLine.set(instructions[i].pc, assemblyLine);
-			let sourceIdent = this.createSourcelineString(instructions[i].sourceFile, instructions[i].line);
+			let sourceIdent = this.createSourcelineString(sourcePath, instructions[i].line);
 			if (this.sourceLineToPc.has(sourceIdent)) {
 				this.sourceLineToPc.get(sourceIdent)!.push(instructions[i].pc);
 			} else {
@@ -182,9 +190,7 @@ export class VenusRuntime extends EventEmitter {
 
 	/** Creates a sourceLine identifier for debugging: C://exampledir/example.file:5 5 == linenumber */
 	private createSourcelineString(path: string, line: number): string {
-		const firstChar = path.charAt(0);
-		path = (firstChar.toLowerCase() === firstChar.toUpperCase()) ? path : firstChar.toUpperCase() + path.slice(1);
-		return path + ':' + Math.round(line).toString();
+		return helpers.canonicalSourcePath(path) + ':' + Math.round(line).toString();
 	}
 
 	public getPcToAssemblyLine(): Map<number, AssemblyLine> {
@@ -335,7 +341,7 @@ export class VenusRuntime extends EventEmitter {
 	 * @param reg The register with value
 	 */
 	public setFRegister(id: number, value: number) {
-		if (Number.isInteger(id) && !Number.isInteger(value)) {
+		if (Number.isInteger(id) && Number.isFinite(value)) {
 			simulator.driver.setFRegister(id, value);
 		}
 	}
@@ -412,6 +418,14 @@ export class VenusRuntime extends EventEmitter {
         this.initiateRun(EscapeCondidtion.continue);
     }
 
+	/** Pause a running program without terminating the debug session. */
+	public pause() {
+		this._pauseRequested = true;
+		if (simulator.driver.timer != null) {
+			this.runEnd(true);
+		}
+	}
+
 	/**
 	 * Stop execution
 	 */
@@ -432,8 +446,9 @@ export class VenusRuntime extends EventEmitter {
 	/** This starts a long running code sequence, for example when clickling continue in the UI */
 	public initiateRun(escapeCondition: EscapeCondidtion) {
         if (simulator.driver.timer != null) {
-            this.runEnd();
+			this.runEnd();
         } else {
+			this._pauseRequested = false;
             try {
 				switch (escapeCondition) {
 					case EscapeCondidtion.continue:
@@ -467,6 +482,10 @@ export class VenusRuntime extends EventEmitter {
         try {
             var cycles = 0;
             while (cycles < VenusRuntime._timeoutCycles) {
+				if (this._pauseRequested) {
+					this.runEnd(true);
+					return;
+				}
                 switch (escapeCondition) {
 					case EscapeCondidtion.continue:
 						if (simulator.driver.sim.isDone() || (simulator.driver.sim.atBreakpoint() && this._stopAtBreakpoint)) {
@@ -504,13 +523,15 @@ export class VenusRuntime extends EventEmitter {
     }
 
 	/** Ends a long running code sequence*/
-    private runEnd() {
+    private runEnd(paused = false) {
         simulator.driver.handleNotExitOver();
 		clearTimeout(simulator.driver.timer);
 
 		simulator.driver.timer = null;
 		this.updateMemory();
-		if (simulator.driver.sim.isDone()) {
+		if (paused) {
+			this.sendEvent('stopOnPause');
+		} else if (simulator.driver.sim.isDone()) {
 			this.sendEvent('end');
 		} else if (simulator.driver.sim.atBreakpoint()) {
 			this.sendEvent('stopOnBreakpoint');
@@ -580,8 +601,8 @@ export class VenusRuntime extends EventEmitter {
 	 * Set breakpoint in file with given line.
 	 */
 	public setBreakPoint(path: string, line: number) : VenusBreakpoint {
-
-		const bp = <VenusBreakpoint> { verified: false, line, id: this._breakpointId++ };
+		path = helpers.canonicalSourcePath(path);
+		const bp = <VenusBreakpoint> { verified: false, line, id: this._breakpointId++, path };
 		let bps = this._breakPoints.get(path);
 		if (!bps) {
 			bps = new Array<VenusBreakpoint>();
@@ -589,9 +610,8 @@ export class VenusRuntime extends EventEmitter {
 		}
 		bps.push(bp);
 
-		this.verifyBreakpoints(path);
-
-		this.toggleBreakpoint(path, bp.line);
+		this.verifyBreakpoint(bp);
+		this.activateBreakpoint(bp);
 
 		return bp;
 	}
@@ -600,11 +620,13 @@ export class VenusRuntime extends EventEmitter {
 	 * Clear breakpoint in file with given line.
 	 */
 	public clearBreakPoint(path: string, line: number) : VenusBreakpoint | undefined {
+		path = helpers.canonicalSourcePath(path);
 		let bps = this._breakPoints.get(path);
 		if (bps) {
 			const index = bps.findIndex(bp => bp.line === line);
 			if (index >= 0) {
 				const bp = bps[index];
+				this.deactivateBreakpoint(bp);
 				bps.splice(index, 1);
 				return bp;
 			}
@@ -616,9 +638,10 @@ export class VenusRuntime extends EventEmitter {
 	 * Clear all breakpoints for file.
 	 */
 	public clearBreakpoints(path: string): void {
+		path = helpers.canonicalSourcePath(path);
 		const bps = this._breakPoints.get(path);
 		if (bps) {
-			bps.forEach(bp => this.toggleBreakpoint(path, bp.line));
+			bps.forEach(bp => this.deactivateBreakpoint(bp));
 		}
 		this._breakPoints.delete(path);
 	}
@@ -626,43 +649,57 @@ export class VenusRuntime extends EventEmitter {
 
 	// private methods
 
-	private verifyBreakpoints(path: string) : void {
-		let bps = this._breakPoints.get(path);
-		if (bps) {
-			let sourceLines = readFileSync(path).toString().split('\n');
-			bps.forEach(bp => {
-				if (!bp.verified && bp.line < sourceLines.length) {
-					const srcLine = sourceLines[bp.line].trim();
+	private resolveBreakpointPcs(path: string, line: number): number[] | undefined {
+		path = helpers.canonicalSourcePath(path);
+		let pcs = this.sourceLineToPc.get(this.createSourcelineString(path, line));
+		const maximumLineNumber = this._maximumLineNumber.get(path);
+		let realLine = line;
+		while ((!pcs || pcs.length === 0) && maximumLineNumber && realLine < maximumLineNumber) {
+			realLine++;
+			pcs = this.sourceLineToPc.get(this.createSourcelineString(path, realLine));
+		}
+		return pcs && pcs.length > 0 ? pcs : undefined;
+	}
 
-					let pc = this.sourceLineToPc.get(this.createSourcelineString(path, bp.line));
-					if (pc === null) {
-						bp.verified = false;
-					} else {
-						bp.verified = true;
-						this.sendEvent('breakpointValidated', bp);
-					}
-
-				}
-			});
+	private verifyBreakpoint(bp: VenusBreakpoint): void {
+		const wasVerified = bp.verified;
+		bp.verified = this.resolveBreakpointPcs(bp.path, bp.line) !== undefined;
+		if (bp.verified !== wasVerified) {
+			this.sendEvent('breakpointValidated', bp);
 		}
 	}
 
-
-	private toggleBreakpoint(path: string, line: number) {
-		let pc = this.sourceLineToPc.get(this.createSourcelineString(path, line));
-		const maximumLineNumber = this._maximumLineNumber.get(path);
-		if(!pc && maximumLineNumber) {
-			let realLine = line + 1;
-			while (!pc && realLine < maximumLineNumber) {
-				pc = this.sourceLineToPc.get(this.createSourcelineString(path, realLine));
-				realLine++;
+	private activateBreakpoint(bp: VenusBreakpoint): void {
+		const pcs = this.resolveBreakpointPcs(bp.path, bp.line);
+		if (!pcs) { return; }
+		pcs.forEach(pc => {
+			const references = this._activeBreakpointPcs.get(pc) || 0;
+			if (references === 0) {
+				simulator.driver.toggleBreakpoint(pc);
 			}
-		}
-		if (pc) {
-			pc.forEach(progcounter => {
-				simulator.driver.toggleBreakpoint(progcounter);
-			});
-		}
+			this._activeBreakpointPcs.set(pc, references + 1);
+		});
+	}
+
+	private deactivateBreakpoint(bp: VenusBreakpoint): void {
+		const pcs = this.resolveBreakpointPcs(bp.path, bp.line);
+		if (!pcs) { return; }
+		pcs.forEach(pc => {
+			const references = this._activeBreakpointPcs.get(pc) || 0;
+			if (references === 1) {
+				simulator.driver.toggleBreakpoint(pc);
+				this._activeBreakpointPcs.delete(pc);
+			} else if (references > 1) {
+				this._activeBreakpointPcs.set(pc, references - 1);
+			}
+		});
+	}
+
+	private reapplyBreakpoints(): void {
+		this._breakPoints.forEach(bps => bps.forEach(bp => {
+			this.verifyBreakpoint(bp);
+			this.activateBreakpoint(bp);
+		}));
 	}
 
 	private sendEvent(event: string, ... args: any[]) {

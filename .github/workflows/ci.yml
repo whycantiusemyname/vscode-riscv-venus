@@ -1,0 +1,67 @@
+name: Build and accept Venus
+
+on:
+  push:
+    branches: ['codex/cs61c-native-venus']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-accept:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out source and Venus core
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Use JDK 8 for the pinned Gradle 4.9 build
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '8'
+
+      - name: Use Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Build Venus core and extension bundle
+        run: npm run compileAll
+
+      - name: Type-check extension and acceptance tests
+        run: npm run compile
+
+      - name: Run real VS Code extension-host acceptance tests
+        run: xvfb-run -a npm test
+        env:
+          VSCODE_VERSION: stable
+
+      - name: Package VSIX
+        run: npm run package
+
+      - name: Upload VSIX
+        uses: actions/upload-artifact@v4
+        with:
+          name: cs61c-riscv-venus-${{ github.sha }}
+          path: '*.vsix'
+          if-no-files-found: error
+
+      - name: Upload VS Code test logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vscode-test-logs-${{ github.sha }}
+          path: |
+            .vscode-test/**/logs/**
+            mock-debug.txt
+          if-no-files-found: ignore

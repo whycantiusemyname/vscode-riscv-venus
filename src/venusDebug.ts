@@ -79,6 +79,8 @@ interface LaunchRequestArguments extends DebugProtocol.LaunchRequestArguments {
 	stopOnEntry?: boolean;
 	/** If we should stop at Breakpoints. If set false the program executes without debugging. */
 	stopAtBreakpoints?: boolean;
+	/** Arguments passed to the simulated program. */
+	args?: string[];
 	/** enable logging the Debug Adapter Protocol */
 	trace?: boolean;
 	/** open views on start */
@@ -134,6 +136,10 @@ export class VenusDebugSession extends LoggingDebugSession {
 		this._runtime.on('stopOnBreakpoint', () => {
 			this.updateAssemblyViewDecorator();
 			this.sendEvent(new StoppedEvent('breakpoint', VenusDebugSession._threadId));
+		});
+		this._runtime.on('stopOnPause', () => {
+			this.updateAssemblyViewDecorator();
+			this.sendEvent(new StoppedEvent('pause', VenusDebugSession._threadId));
 		});
 		this._runtime.on('stopOnDataBreakpoint', () => {
 			this.sendEvent(new StoppedEvent('data breakpoint', VenusDebugSession._threadId));
@@ -242,10 +248,15 @@ export class VenusDebugSession extends LoggingDebugSession {
 		commands.executeCommand('setContext', 'venus:showOptionsMenu', true);
 
 		// Here we send to programm to be assembled
-		this._runtime.assemble(args.program, basename(args.program), this.getSettings());
-		if (args.stopAtBreakpoints) {
-			this._runtime.setStopAtBreakpoint(args.stopAtBreakpoints);
+		const assembled = this._runtime.assemble(args.program, basename(args.program), this.getSettings(), args.args || []);
+		if (!assembled) {
+			response.success = false;
+			response.message = `Unable to assemble ${args.program}`;
+			this.sendResponse(response);
+			this.sendEvent(new TerminatedEvent());
+			return;
 		}
+		this._runtime.setStopAtBreakpoint(args.stopAtBreakpoints !== false);
 
 		if (args.ledMatrixSize && args.ledMatrixSize.x && args.ledMatrixSize.y) {
 			VenusLedMatrixUI.createNewInstance(undefined, new UIState(new LedMatrix(args.ledMatrixSize.x, args.ledMatrixSize.y)));
@@ -255,7 +266,7 @@ export class VenusDebugSession extends LoggingDebugSession {
 		this.resetViews();
 
 		// wait until configuration has finished (and configurationDoneRequest has been called)
-		await this._configurationDone.wait(100);
+		await this._configurationDone.wait(5000);
 
 		args.openViews?.forEach(view => {
 			this.openView(view);
@@ -472,7 +483,7 @@ export class VenusDebugSession extends LoggingDebugSession {
 	}
 
 	protected pauseRequest(response: DebugProtocol.PauseResponse, args: DebugProtocol.PauseArguments) {
-		this._runtime.run();
+		this._runtime.pause();
 		this.sendResponse(response);
 	}
 

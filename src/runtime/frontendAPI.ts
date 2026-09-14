@@ -18,7 +18,13 @@ function setMaxSteps(steps: number) {
 	form.value = steps.toString()
 }
 
+function setArgs(args: string[]) {
+	const form = document.getElementById("ArgsList") as HTMLInputElement;
+	form.value = args.map(arg => JSON.stringify(arg)).join(' ');
+}
+
 export {
 	setText,
-	setMaxSteps
+	setMaxSteps,
+	setArgs
 }

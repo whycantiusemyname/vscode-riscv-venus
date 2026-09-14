@@ -116,7 +116,7 @@ export class AssemblyView {
 
 	public close() {
 		if (this.subscriptions != null) {
-			for (let i = 0; i > this.subscriptions.length; i++) {
+			for (let i = 0; i < this.subscriptions.length; i++) {
 				let disposable = this.subscriptions[i]
 				try {
 					disposable.dispose()

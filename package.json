@@ -1,9 +1,9 @@
 {
 	"name": "riscv-venus",
-	"displayName": "RISC-V Venus Simulator",
-	"version": "1.9.1",
+	"displayName": "CS61C Native Venus Simulator",
+	"version": "1.9.2",
 	"publisher": "hm",
-	"description": "RISC-V Venus Simulator embedded in VS Code",
+	"description": "Native VS Code Venus debugger with reliable CS61C .import source breakpoints",
 	"author": {
 		"name": "Munich University of Applied Sciences",
 		"email": "stefan.wallentowitz@hm.edu"
@@ -289,6 +289,14 @@
 								"type": "string",
 								"description": "Absolute path to a text file.",
 								"default": "${workspaceFolder}/${command:AskForProgramName}"
+							},
+							"args": {
+								"type": "array",
+								"description": "Arguments passed to the simulated program.",
+								"default": [],
+								"items": {
+									"type": "string"
+								}
 							},
 							"stopOnEntry": {
 								"type": "boolean",

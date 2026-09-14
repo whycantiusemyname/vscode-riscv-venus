@@ -1,4 +1,12 @@
-# RISC-V Venus Simulator embedded in VS Code
+# CS61C Native Venus Simulator for VS Code
+
+This `1.9.2` course-adapted build keeps the native VS Code editor and debugger
+experience while fixing imported-source breakpoint activation, Windows source
+path matching, pause behavior, launch failure reporting, and program arguments.
+It is built and accepted in GitHub Actions; the workflow packages a VSIX only
+after a real VS Code extension host has debugged a Project 2-shaped fixture in
+a path containing spaces, stepped it, hit a breakpoint inside an `.import`ed
+`src/abs.s`, and read and modified registers.
 
 This Visual Studio Code extension embeds the popular
 [Venus RISC-V simulator](https://venus.cs61c.org/). It provides a standalone
@@ -55,6 +63,7 @@ There is also Support for the VSCode-Inherent [launch.json](https://go.microsoft
             "request": "launch",
             "name": "Launch current file with all options",
             "program": "${file}",
+			"args": [],
             "stopOnEntry": true,
             "stopAtBreakpoints": true,
             "openViews": [

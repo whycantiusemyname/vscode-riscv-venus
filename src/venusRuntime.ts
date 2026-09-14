@@ -72,6 +72,12 @@ export class VenusRuntime extends EventEmitter {
 
 	// This stack keeps track of the functions we jumped from
 	private _functionStack = new Array<CallStackItem>();
+	// A stack snapshot for every instruction executed through this runtime.  The
+	// simulator can undo registers and memory, but it has no notion of the
+	// debugger's source-level call stack, so restoring this snapshot is the only
+	// reliable way to unwind it (rather than trying to infer a call from the
+	// instruction at the new PC).
+	private _stackHistory = new Array<CallStackItem[]>();
 
 	// maps from sourceFile to array of Mock breakpoints
 	private _breakPoints = new Map<string, VenusBreakpoint[]>();
@@ -130,6 +136,8 @@ export class VenusRuntime extends EventEmitter {
 			}
 
 			this.getAssemblyLines();
+			this._functionStack = [];
+			this._stackHistory = [];
 			this.reapplyBreakpoints();
 			return true;
 		} catch (e: unknown) {
@@ -389,10 +397,15 @@ export class VenusRuntime extends EventEmitter {
 	 */
 	public step(reverse = false) {
 		if (reverse) {
-			simulator.driver.undo();
+			// undo() is intentionally a no-op when the simulator history is empty.
+			// Keep our own history in lockstep and avoid restoring a stale stack.
+			if (this._stackHistory.length > 0) {
+				simulator.driver.undo();
+				this._functionStack = this._stackHistory.pop()!;
+				this.reindexStack();
+			}
 		} else {
-			simulator.driver.step();
-			this.updateStack();
+			this.executeStep();
 		}
 		this.updateMemory();
 		if (simulator.driver.isFinished()) {
@@ -545,7 +558,13 @@ export class VenusRuntime extends EventEmitter {
 
 	/** A wrapper for the simulator step function. Everything that should be updated when stepping is additionally called here. */
 	private runStep() {
+		this.executeStep();
+	}
+
+	private executeStep() {
+		const previousStack = this._functionStack.map(frame => ({ ...frame }));
 		simulator.driver.sim.step();
+		this._stackHistory.push(previousStack);
 		this.updateStack();
 	}
 
@@ -584,8 +603,13 @@ export class VenusRuntime extends EventEmitter {
 					file: assemblyLine.sourcePath,
 					line: assemblyLine.sourceLine + lineadditive // the top element on the stack defines the highlighted line in the editor!!!
 				});
+			this.reindexStack();
 
 		}
+	}
+
+	private reindexStack() {
+		this._functionStack.forEach((frame, index) => frame.index = index);
 	}
 
 	/**
@@ -593,10 +617,8 @@ export class VenusRuntime extends EventEmitter {
 	 */
 	public stack(startFrame: number, endFrame: number): any {
 
-		return {
-			frames: this._functionStack,
-			count: this._functionStack.length
-		};
+		const frames = this._functionStack.slice(startFrame, endFrame);
+		return { frames, count: this._functionStack.length };
 
 	}
 

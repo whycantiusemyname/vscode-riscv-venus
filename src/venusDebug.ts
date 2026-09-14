@@ -81,6 +81,8 @@ interface LaunchRequestArguments extends DebugProtocol.LaunchRequestArguments {
 	stopAtBreakpoints?: boolean;
 	/** Arguments passed to the simulated program. */
 	args?: string[];
+	/** Working directory used to resolve relative program paths and file access. */
+	cwd?: string;
 	/** enable logging the Debug Adapter Protocol */
 	trace?: boolean;
 	/** open views on start */
@@ -247,8 +249,13 @@ export class VenusDebugSession extends LoggingDebugSession {
 		// Sometimes the Venus Options Menu is not shown.(Vscode Bug?) This makes sure it is shown at least when we start debug
 		commands.executeCommand('setContext', 'venus:showOptionsMenu', true);
 
+		// Resolve the program against the configured working directory so that a
+		// relative program behaves like `venus.jar -wd <dir> <program>`.
+		const cwd = args.cwd ? path.resolve(args.cwd) : undefined;
+		const program = path.isAbsolute(args.program) ? args.program : path.resolve(cwd ?? process.cwd(), args.program);
+
 		// Here we send to programm to be assembled
-		const assembled = this._runtime.assemble(args.program, basename(args.program), this.getSettings(), args.args || []);
+		const assembled = this._runtime.assemble(program, basename(program), this.getSettings(), args.args || [], cwd);
 		if (!assembled) {
 			response.success = false;
 			response.message = `Unable to assemble ${args.program}`;
@@ -478,6 +485,7 @@ export class VenusDebugSession extends LoggingDebugSession {
 	}
 
 	protected continueRequest(response: DebugProtocol.ContinueResponse, args: DebugProtocol.ContinueArguments): void {
+		response.body = { allThreadsContinued: true };
 		this._runtime.run();
 		this.sendResponse(response);
 	}
@@ -690,6 +698,24 @@ export class VenusDebugSession extends LoggingDebugSession {
 		venusTerminal.appendText('\n');		
 		
 		this.sendResponse(response);
+	}
+
+	/**
+	 * Extension specific introspection used by the acceptance suite and by the
+	 * integration layer. It reports the invocation state (entry file, argv and
+	 * working directory) the runtime was actually initialised with.
+	 */
+	protected customRequest(command: string, response: DebugProtocol.Response, args: any, request?: DebugProtocol.Request): void {
+		if (command === 'venus/runtimeInfo') {
+			response.body = {
+				program: this._runtime.sourceFile,
+				programArguments: this._runtime.getProgramArguments(),
+				workingDirectory: this._runtime.getWorkingDirectory()
+			};
+			this.sendResponse(response);
+			return;
+		}
+		super.customRequest(command, response, args, request);
 	}
 
 	//---- helpers

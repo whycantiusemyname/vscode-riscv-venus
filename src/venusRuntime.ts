@@ -3,6 +3,7 @@
  *--------------------------------------------------------*/
 
 import { readFileSync } from 'fs';
+import { dirname } from 'path';
 import { EventEmitter } from 'events';
 import simulator = require('./runtime/riscvSimulator');
 import range from 'lodash/range';
@@ -94,6 +95,12 @@ export class VenusRuntime extends EventEmitter {
 	private _activeBreakpointPcs = new Map<number, number>();
 	private _pauseRequested = false;
 
+	// Program invocation state. The simulator owns argv/argc, but the debugger
+	// keeps its own copy so launch parameters can be observed (and asserted)
+	// through the adapter instead of re-reading the shared fake DOM.
+	private _programArguments: string[] = [];
+	private _workingDirectory: string | undefined;
+
 	constructor() {
 		super();
 		VenusRenderer.getInstance().setRuntime(this);
@@ -117,10 +124,16 @@ export class VenusRuntime extends EventEmitter {
 		}
 	}
 
-	public assemble(fpath: string, fName: string, settings: VenusSettings, programArgs: string[] = []): boolean {
+	public assemble(fpath: string, fName: string, settings: VenusSettings, programArgs: string[] = [], workingDirectory?: string): boolean {
 		try {
 			this.applySettings(settings);
-			simulator.frontendAPI.setArgs(programArgs);
+			// argv is initialised by the Venus core from the ArgsList DOM value,
+			// so record the exact arguments handed to it. The working directory
+			// defaults to the program directory: that is the directory the
+			// course test-src drivers expect relative paths in.
+			this._programArguments = programArgs.slice();
+			this.setWorkingDirectory(workingDirectory ?? dirname(fpath));
+			simulator.frontendAPI.setArgs(this._programArguments);
 			let text: string = readFileSync(fpath).toString();
 			// Feed Venus the same canonical path we use for source maps. On Windows
 			// this also normalizes an uppercase drive (C:) to the drive form handled
@@ -136,6 +149,7 @@ export class VenusRuntime extends EventEmitter {
 			}
 
 			this.getAssemblyLines();
+			this._sourceFile = fpath;
 			this._functionStack = [];
 			this._stackHistory = [];
 			this.reapplyBreakpoints();
@@ -222,6 +236,39 @@ export class VenusRuntime extends EventEmitter {
 
 	public getPRIV(): number {
 		return simulator.driver.sim.getPRIV();
+	}
+
+	/**
+	 * The program arguments the last assemble was initialised with. The
+	 * simulated program sees these as argv (argv[0] is the program name).
+	 */
+	public getProgramArguments(): string[] {
+		return this._programArguments.slice();
+	}
+
+	/**
+	 * The working directory relative program paths are resolved against. The
+	 * host-disk bridge consumes this value as well.
+	 */
+	public getWorkingDirectory(): string | undefined {
+		return this._workingDirectory;
+	}
+
+	/**
+	 * Sets the working directory used for relative path resolution. The value is
+	 * canonicalised like source paths so it can be compared with the paths the
+	 * simulator reports.
+	 */
+	public setWorkingDirectory(dir: string): void {
+		if (!dir) { return; }
+		this._workingDirectory = helpers.canonicalSourcePath(dir);
+		try {
+			// Publish the value on the driver so the (separately owned) host file
+			// bridge can pick it up without another plumbing channel.
+			(simulator.driver as any).workingDirectory = this._workingDirectory;
+		} catch (e) {
+			// The driver is a compiled Kotlin object; this is best effort only.
+		}
 	}
 
 	public useRegister(id: number) {
@@ -396,6 +443,10 @@ export class VenusRuntime extends EventEmitter {
 	 * Step to the next/previous non empty line. Also steps into functions
 	 */
 	public step(reverse = false) {
+		// A step request can arrive while a run loop is still scheduled. Stop
+		// that loop silently first so exactly one instruction is executed.
+		this.cancelRun();
+		this._pauseRequested = false;
 		if (reverse) {
 			// undo() is intentionally a no-op when the simulator history is empty.
 			// Keep our own history in lockstep and avoid restoring a stale stack.
@@ -436,9 +487,20 @@ export class VenusRuntime extends EventEmitter {
 
 	/** Pause a running program without terminating the debug session. */
 	public pause() {
+		if (simulator.driver.timer == null) {
+			// Nothing is running: do not latch a pause flag that would abort a
+			// later run and make the following continue look like a no-op.
+			return;
+		}
 		this._pauseRequested = true;
+		this.runEnd(true);
+	}
+
+	/** Stops the scheduled run loop without reporting a stop to the frontend. */
+	private cancelRun() {
 		if (simulator.driver.timer != null) {
-			this.runEnd(true);
+			clearTimeout(simulator.driver.timer);
+			simulator.driver.timer = null;
 		}
 	}
 
@@ -447,8 +509,8 @@ export class VenusRuntime extends EventEmitter {
 	 */
 	public stop() {
         simulator.driver.handleNotExitOver();
-		clearTimeout(simulator.driver.timer);
-		simulator.driver.timer = null;
+		this.cancelRun();
+		this._pauseRequested = false;
 		this.sendEvent('end');
 	}
 
@@ -462,10 +524,13 @@ export class VenusRuntime extends EventEmitter {
 	/** This starts a long running code sequence, for example when clickling continue in the UI */
 	public initiateRun(escapeCondition: EscapeCondidtion) {
         if (simulator.driver.timer != null) {
-			this.runEnd();
-        } else {
-			this._pauseRequested = false;
-            try {
+			// A run loop is already scheduled. A duplicate resume/step request
+			// must not stop the program or emit a bogus stop event: the target
+			// is already running exactly as requested.
+			return;
+        }
+		this._pauseRequested = false;
+        try {
 				switch (escapeCondition) {
 					case EscapeCondidtion.continue:
 						this.runStep(); // walk past breakpoint
@@ -486,11 +551,13 @@ export class VenusRuntime extends EventEmitter {
 						}
 						break;
 				}
+			// Tell the frontend the target is running again; otherwise the
+			// thread stays marked as stopped until the next stop event.
+			this.sendEvent('continue');
             } catch (e) {
                 this.runEnd();
                 simulator.driver.handleError("initiateRun", e);
             }
-        }
     }
 
 	/** Runs a long running code sequence. Timeouts from time to time to not block the event loop */
@@ -541,9 +608,8 @@ export class VenusRuntime extends EventEmitter {
 	/** Ends a long running code sequence*/
     private runEnd(paused = false) {
         simulator.driver.handleNotExitOver();
-		clearTimeout(simulator.driver.timer);
-
-		simulator.driver.timer = null;
+		this.cancelRun();
+		this._pauseRequested = false;
 		this.updateMemory();
 		if (paused) {
 			this.sendEvent('stopOnPause');

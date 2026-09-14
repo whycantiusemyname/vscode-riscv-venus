@@ -368,6 +368,11 @@
 									"type": "string"
 								}
 							},
+							"cwd": {
+								"type": "string",
+								"description": "Working directory used to resolve relative program paths and program file access. Defaults to the directory containing the program.",
+								"default": "${fileDirname}"
+							},
 							"stopOnEntry": {
 								"type": "boolean",
 								"description": "Automatically stop after launch.",

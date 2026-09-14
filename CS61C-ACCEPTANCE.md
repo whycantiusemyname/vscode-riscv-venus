@@ -14,7 +14,18 @@ The extension-host suite validates the following native debugger path:
 5. confirm the stack frame points to the imported source and expected line;
 6. expose integer registers and modify `t0` through DAP `setVariable`;
 7. start an infinite program and pause it without terminating the session;
-8. package the exact accepted commit as a VSIX artifact.
+8. confirm a paused program stops advancing and that `continue` resumes it
+   without a synthetic stop event;
+9. confirm the launch `args` reach the program as `argv` (`a0` = argc,
+   `a1` = argv) and that the launch `cwd` (default: the directory containing
+   the program) is the working directory the runtime reports;
+10. package the exact accepted commit as a VSIX artifact.
+
+The adapter exposes `venus/runtimeInfo` for these checks: it returns the entry
+file, the program arguments and the effective working directory the runtime was
+initialised with. The `cwd` launch attribute is forwarded to the runtime, where
+the host-disk bridge is expected to consume it; relative program paths are
+resolved against it.
 
 The course JAR remains authoritative for calling-convention checking,
 memcheck, file-I/O error behavior, and exit-code tests. This extension does not

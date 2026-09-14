@@ -6,6 +6,7 @@
 
 !src/documentation
 !dist/*.js
+!dist/*.LICENSE.txt
 !src/{ledmatrix,memoryui,robot,sevensegboard}/*
 !extension/images/**
 !images

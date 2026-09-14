@@ -213,15 +213,27 @@ suite('CS61C native register and memory editing', () => {
       const body = response!.body || {};
       const capabilities = body.capabilities || body;
 
-      // implemented: register writes, the memory requests and Prev
+      // implemented: configuration, register writes, the memory requests,
+      // hovers and Prev
+      assert.strictEqual(capabilities.supportsConfigurationDoneRequest, true);
       assert.strictEqual(capabilities.supportsSetVariable, true);
       assert.strictEqual(capabilities.supportsReadMemoryRequest, true);
       assert.strictEqual(capabilities.supportsWriteMemoryRequest, true);
+      assert.strictEqual(capabilities.supportsEvaluateForHovers, true);
       assert.strictEqual(capabilities.supportsStepBack, true);
-      // not implemented: dataBreakpointInfo never offers a dataId and the
-      // simulator has no watchpoints, so no data breakpoint can be armed
+      // not implemented: dataBreakpointInfo never offers a dataId for a
+      // register and the simulator has no watchpoints, so no data breakpoint
+      // can be armed
       assert.notStrictEqual(capabilities.supportsDataBreakpoints, true,
         'data breakpoints cannot be armed, so the capability must stay off');
+      // not implemented: the completion handler has no completion source and
+      // the cancel handler has nothing that can be cancelled
+      assert.notStrictEqual(capabilities.supportsCompletionsRequest, true,
+        'the adapter has no completion source, so it must not offer completions');
+      assert.notStrictEqual(capabilities.supportsCancelRequest, true,
+        'nothing in the adapter can be cancelled, so it must not offer cancellation');
+      assert.notStrictEqual(capabilities.supportsDisassembleRequest, true,
+        'the DAP disassemble request is not implemented');
       assert.strictEqual(capabilities.supportsRestartRequest, false);
       assert.strictEqual(capabilities.supportsBreakpointLocationsRequest, false);
     } finally {

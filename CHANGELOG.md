@@ -8,6 +8,11 @@
   writes while the program runs or into an immutable text segment
 * Stop advertising data breakpoints: `dataBreakpointInfo` never offers a
   `dataId`, so no data breakpoint could be armed
+* Stop advertising REPL completions (the handler only returned placeholder
+  items) and cancellation (nothing in the adapter is cancellable); both
+  requests are still answered with an empty result and an acknowledgement
+* Answer `dataBreakpointInfo` with a null `dataId` for an unknown or expired
+  variable handle instead of failing inside the handler
 
 ## 1.9.1
 * Add binary format to memory view

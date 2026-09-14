@@ -190,24 +190,31 @@ export class VenusDebugSession extends LoggingDebugSession {
 		response.body.supportsStepBack = true;
 
 		// Data breakpoints are not implemented: dataBreakpointInfoRequest never
-		// returns a dataId (the simulator has no watchpoints), so a data
-		// breakpoint could never be armed. Only advertise what can be honoured.
+		// offers a dataId for a register (the simulator has no watchpoints), so
+		// a data breakpoint could never be armed. Only advertise what can be
+		// honoured.
 		response.body.supportsDataBreakpoints = false;
 
-		// make VS Code to support completion in REPL
-		response.body.supportsCompletionsRequest = true;
-		response.body.completionTriggerCharacters = [ ".", "[" ];
+		// This adapter has no completion source: the handler used to answer with
+		// placeholder items ("item 10", "func(arg)") that never matched the
+		// program. Offering no completions is better than offering junk, so the
+		// capability stays off and the trigger characters go with it.
+		response.body.supportsCompletionsRequest = false;
 
-		// make VS Code to send cancelRequests
-		response.body.supportsCancelRequest = true;
+		// Nothing in this adapter is cancellable: execution is driven by
+		// timeouts that are already drained before a request is dispatched and
+		// the handler only records a token nobody reads. Do not make the client
+		// wait on a cancellation contract the adapter cannot honour.
+		response.body.supportsCancelRequest = false;
 
 		// make VS Code send the breakpointLocations request
 		response.body.supportsBreakpointLocationsRequest = false;
 
 		// TODO Test if this works reliably now
 		response.body.supportsRestartRequest = false;
-		// Doesn't seem to be supported for now
-		// response.body.supportsDisassembleRequest = true;
+		// The Assembly view disassembles inside the extension; the DAP
+		// 'disassemble' request is not implemented.
+		response.body.supportsDisassembleRequest = false;
 
 		this.sendResponse(response);
 
@@ -689,7 +696,6 @@ export class VenusDebugSession extends LoggingDebugSession {
 		this._cancelledProgressId = undefined;
 	}
 
-	// Unused right now
 	protected dataBreakpointInfoRequest(response: DebugProtocol.DataBreakpointInfoResponse, args: DebugProtocol.DataBreakpointInfoArguments): void {
 
 		response.body = {
@@ -700,8 +706,10 @@ export class VenusDebugSession extends LoggingDebugSession {
         };
 
 		if (args.variablesReference && args.name) {
+			// Handles.get() returns undefined for an unknown or expired handle,
+			// so check before matching the prefix.
 			const id = this._variableHandles.get(args.variablesReference);
-			if (id.startsWith("global_")) {
+			if (id !== undefined && id.startsWith("global_")) {
 				response.body.dataId = args.name;
 				response.body.description = args.name;
 				response.body.accessTypes = [ "read" ];
@@ -713,35 +721,13 @@ export class VenusDebugSession extends LoggingDebugSession {
 	}
 
 
-	// Unused right now
 	protected completionsRequest(response: DebugProtocol.CompletionsResponse, args: DebugProtocol.CompletionsArguments): void {
 
 		response.body = {
-			targets: [
-				{
-					label: "item 10",
-					sortText: "10"
-				},
-				{
-					label: "item 1",
-					sortText: "01"
-				},
-				{
-					label: "item 2",
-					sortText: "02"
-				},
-				{
-					label: "array[]",
-					selectionStart: 6,
-					sortText: "03"
-				},
-				{
-					label: "func(arg)",
-					selectionStart: 5,
-					selectionLength: 3,
-					sortText: "04"
-				}
-			]
+			// supportsCompletionsRequest is off: there is no expression language
+			// to complete. A client that ignores the capability still gets an
+			// empty, honest answer instead of placeholder items.
+			targets: []
 		};
 		this.sendResponse(response);
 	}
@@ -753,6 +739,10 @@ export class VenusDebugSession extends LoggingDebugSession {
 		if (args.progressId) {
 			this._cancelledProgressId= args.progressId;
 		}
+		// The base protocol expects a response to every request.
+		// supportsCancelRequest is off, but a client that sends 'cancel' anyway
+		// must not be left waiting for an acknowledgement that never arrives.
+		this.sendResponse(response);
 	}
 	protected disconnectRequest(response: DebugProtocol.DisconnectResponse, args: DebugProtocol.DisconnectArguments) {
 		

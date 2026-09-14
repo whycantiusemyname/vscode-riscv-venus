@@ -56,6 +56,22 @@ jobs:
       - name: Run headless CS61C course parity tests
         run: npm run test:course
 
+      - name: Download and verify the pinned CS61C course Venus JAR
+        shell: pwsh
+        run: |
+          $jar = Join-Path $env:RUNNER_TEMP 'venus-fa24.jar'
+          Invoke-WebRequest -Uri 'https://inst.eecs.berkeley.edu/~cs61c/su24/tools/venus-latest.jar' -OutFile $jar
+          $expected = '69e48a8ffecb155d1227d171ae6888be0d3e103975d04b19762a08fc9463e1cc'
+          $actual = (Get-FileHash -LiteralPath $jar -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "Pinned course Venus JAR hash mismatch: $actual" }
+          "VENUS_COURSE_JAR=$jar" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Differential acceptance against the pinned course venus.jar
+        shell: pwsh
+        run: |
+          $env:VENUS_COURSE_REQUIRE = '1'
+          npm run test:course-parity
+
       - name: Download the Windows VS Code test host
         shell: pwsh
         run: |

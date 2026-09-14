@@ -100,15 +100,21 @@ jobs:
       - name: Run headless CS61C course parity tests
         run: npm run test:course
 
-      - name: Differential acceptance against the pinned course venus.jar
+      - name: Download and verify the pinned CS61C course Venus JAR
+        shell: bash
         run: |
-          JAR=course-fa24/projects/proj2-cs61classify/tools/venus.jar
-          if [ -f "$JAR" ]; then
-            VENUS_COURSE_JAR="$JAR" VENUS_COURSE_REQUIRE=1 npm run test:course-parity
-          else
-            echo '::notice::course venus.jar is not present in this checkout; the differential harness reports SKIPPED'
-            npm run test:course-parity
-          fi
+          set -euo pipefail
+          JAR="${RUNNER_TEMP}/venus-fa24.jar"
+          curl --fail --location --silent --show-error \
+            'https://inst.eecs.berkeley.edu/~cs61c/su24/tools/venus-latest.jar' \
+            --output "$JAR"
+          echo '69e48a8ffecb155d1227d171ae6888be0d3e103975d04b19762a08fc9463e1cc  '"$JAR" | sha256sum -c -
+          echo "VENUS_COURSE_JAR=$JAR" >> "$GITHUB_ENV"
+
+      - name: Differential acceptance against the pinned course venus.jar
+        run: npm run test:course-parity
+        env:
+          VENUS_COURSE_REQUIRE: '1'
 
       - name: Ensure xvfb is available
         shell: bash

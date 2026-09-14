@@ -792,6 +792,14 @@ export class VenusRuntime extends EventEmitter {
 	}
 
 	private executeStep() {
+		// A launch without stopOnEntry never reported an entry stop, so the source
+		// level stack is still empty when the first instruction runs. Build it first:
+		// otherwise that instruction records an empty snapshot and Prev back to it
+		// would restore a stop with no frame (nothing highlighted, and a zero
+		// step-over depth).
+		if (this._functionStack.length === 0) {
+			this.updateStack();
+		}
 		const previousStack = this._functionStack.map(frame => ({ ...frame }));
 		simulator.driver.sim.step();
 		this.recordStackHistory(previousStack);

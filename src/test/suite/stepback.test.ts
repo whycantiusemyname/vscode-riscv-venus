@@ -36,18 +36,36 @@ suite('CS61C Venus Prev (step back) acceptance', () => {
     });
   }
 
-  async function startStepbackSession(transcript: DebugTranscript): Promise<vscode.DebugSession> {
+  /**
+   * Starts the fixture, optionally after arming a source breakpoint. A launch
+   * without stopOnEntry reports no entry stop, so the caller has to state which
+   * stop it is waiting for.
+   */
+  async function startStepbackSession(
+    transcript: DebugTranscript,
+    options: { stopOnEntry?: boolean; breakpointLine?: number } = {}
+  ): Promise<vscode.DebugSession> {
+    if (options.breakpointLine !== undefined) {
+      // Open the fixture first: VS Code forwards breakpoints for sources the
+      // editor knows about, and the adapter verifies them before the run starts.
+      await vscode.workspace.openTextDocument(vscode.Uri.file(program));
+      vscode.debug.addBreakpoints([
+        new vscode.SourceBreakpoint(new vscode.Location(
+          vscode.Uri.file(program), new vscode.Position(options.breakpointLine - 1, 0)))
+      ]);
+    }
     const started = await vscode.debug.startDebugging(undefined, {
       type: 'venus',
       request: 'launch',
       name: 'CS61C prev acceptance',
       program,
-      stopOnEntry: true,
+      stopOnEntry: options.stopOnEntry !== false,
       stopAtBreakpoints: true
     });
     assert.strictEqual(started, true, 'the debug session should start');
+    const stopReason = options.stopOnEntry === false ? 'breakpoint' : 'entry';
     await transcript.waitFor(message =>
-      message.type === 'event' && message.event === 'stopped' && message.body.reason === 'entry');
+      message.type === 'event' && message.event === 'stopped' && message.body.reason === stopReason);
     const session = vscode.debug.activeDebugSession;
     assert.ok(session, 'a Venus debug session should be active');
     return session!;
@@ -251,6 +269,41 @@ suite('CS61C Venus Prev (step back) acceptance', () => {
       assert.ok(atLine(afterThreePrevs, 17), 'got ' + afterThreePrevs.frames[0]);
       assert.strictEqual(lower(afterThreePrevs.registers.x28), hex(7),
         'undoing the add restores the value loaded from memory');
+    } finally {
+      tracker.dispose();
+    }
+  });
+
+  /**
+   * Regression: a launch without stopOnEntry never reports an entry stop, so the
+   * runtime has to build the source level stack for the first instruction before
+   * snapshotting it. Otherwise Prev back to that instruction restores an empty
+   * stack: stackTrace reports no frame at all (nothing is highlighted) and the
+   * step-over depth becomes zero.
+   */
+  test('Prev back to the first instruction keeps a caller frame without stopOnEntry', async () => {
+    const transcript = new DebugTranscript();
+    const tracker = trackSession(transcript);
+    try {
+      // Stop on the second instruction, so exactly one instruction has run.
+      const session = await startStepbackSession(transcript, { stopOnEntry: false, breakpointLine: 8 });
+
+      const stopped = await takeStepSnapshot(session);
+      assert.strictEqual(stopped.frameCount, 1, 'the breakpoint stop reports the main frame');
+      assert.ok(atLine(stopped, 8), 'the breakpoint stop is line 8, got ' + stopped.frames[0]);
+      assert.strictEqual(lower(stopped.registers.x05), hex(1), 'li t0, 1 has run');
+
+      // Prev undoes that one instruction and must land on the first instruction
+      // with the same single caller frame instead of an empty stack.
+      assert.strictEqual(await stepBackOnce(session, transcript), false);
+      const atStart = await takeStepSnapshot(session);
+      assert.strictEqual(atStart.frameCount, 1, 'Prev must keep the main frame');
+      assert.ok(atLine(atStart, 7), 'Prev must restore line 7, got ' + atStart.frames[0]);
+      assert.strictEqual(lower(atStart.registers.x05), hex(0), 'Prev must undo li t0, 1');
+
+      // Nothing ran before that instruction, so there is nothing left to undo.
+      assert.strictEqual(await stepBackOnce(session, transcript), true,
+        'Prev before the first instruction must be refused');
     } finally {
       tracker.dispose();
     }

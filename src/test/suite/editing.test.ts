@@ -116,7 +116,7 @@ suite('CS61C native register and memory editing', () => {
 
       // The program must read the poked value on the next instruction.
       mark = transcript.mark();
-      await session!.customRequest('step', { threadId: 1 });
+      await session!.customRequest('stepIn', { threadId: 1 });
       await transcript.waitFor(stopped('step'), mark);
       assert.strictEqual(await readRegister(session!, scope, 'x29'), 0x2a, 't4 copied the poked t3');
 
@@ -143,12 +143,12 @@ suite('CS61C native register and memory editing', () => {
       assert.deepStrictEqual(Buffer.from(after.data, 'base64'), word, 'the write must be readable');
 
       mark = transcript.mark();
-      await session!.customRequest('step', { threadId: 1 });
+      await session!.customRequest('stepIn', { threadId: 1 });
       await transcript.waitFor(stopped('step'), mark);
       assert.strictEqual(await readRegister(session!, scope, 'x06'), 0x112a, 'lw loaded the written word');
 
       mark = transcript.mark();
-      await session!.customRequest('step', { threadId: 1 });
+      await session!.customRequest('stepIn', { threadId: 1 });
       await transcript.waitFor(stopped('step'), mark);
       assert.strictEqual(await readRegister(session!, scope, 'x07'), 0x112a, 'the word propagates through the program');
 

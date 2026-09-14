@@ -2,7 +2,9 @@ name: Windows build and acceptance
 
 on:
   push:
-    branches: ['codex/cs61c-native-venus']
+    branches:
+      - codex/cs61c-native-venus
+      - codex/venus-parity-integration
   pull_request:
   workflow_dispatch:
 

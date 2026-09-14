@@ -41,6 +41,12 @@ function Invoke-CorePatch {
         throw "missing patch file $patchPath"
     }
     $gitArgs = @('-C', $Repository, 'apply')
+    # The pinned venus/venusbackend revisions store their sources with CRLF line endings
+    # (src/main/kotlin/venus/vfs/VirtualFileSystem.kt is even mixed), while these patches
+    # are stored with LF. Without --ignore-whitespace `git apply` refuses every hunk on a
+    # fresh checkout, so the CI patch step could never succeed; --whitespace=nowarn keeps
+    # the resulting whitespace-only warning out of the CI log.
+    $gitArgs += @('--ignore-whitespace', '--whitespace=nowarn')
     if ($Check) { $gitArgs += '--check' }
     if ($Reverse) { $gitArgs += '--reverse' }
     $gitArgs += $patchPath

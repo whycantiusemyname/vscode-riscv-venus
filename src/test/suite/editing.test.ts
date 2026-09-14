@@ -277,7 +277,7 @@ suite('CS61C native register and memory editing', () => {
 
       // Execute the addi once, so Prev has an instruction to undo next.
       mark = transcript.mark();
-      await session!.customRequest('step', { threadId: 1 });
+      await session!.customRequest('stepIn', { threadId: 1 });
       await transcript.waitFor(stopped('step'), mark);
       assert.strictEqual(await readRegister(session!, scope, 'x29'), 7, 't4 copied t3');
 
@@ -313,12 +313,12 @@ suite('CS61C native register and memory editing', () => {
       assert.strictEqual(repoke.value.toLowerCase(), '0x0000002a');
 
       mark = transcript.mark();
-      await session!.customRequest('step', { threadId: 1 });
+      await session!.customRequest('stepIn', { threadId: 1 });
       await transcript.waitFor(stopped('step'), mark);
       assert.strictEqual(await readRegister(session!, scope, 'x29'), 0x2a, 'the re-executed add copies the poked t3');
 
       mark = transcript.mark();
-      await session!.customRequest('step', { threadId: 1 });
+      await session!.customRequest('stepIn', { threadId: 1 });
       await transcript.waitFor(stopped('step'), mark);
       assert.strictEqual(await readRegister(session!, scope, 'x06'), 0x112a, 'the re-executed lw loads the poked word');
 

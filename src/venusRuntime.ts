@@ -100,6 +100,10 @@ export class VenusRuntime extends EventEmitter {
 	// PCs toggled in the simulator, with the number of source breakpoints resolved to them.
 	private _activeBreakpointPcs = new Map<number, number>();
 	private _pauseRequested = false;
+	// The extension owns its own asynchronous run loop. Do not reuse Driver's
+	// private Kotlin timer: that field is name-mangled in the compiled JS, so
+	// assigning `driver.timer` from TypeScript creates an unrelated property.
+	private _runTimer: ReturnType<typeof setTimeout> | null = null;
 
 	// Program invocation state. The simulator owns argv/argc, but the debugger
 	// keeps its own copy so launch parameters can be observed (and asserted)
@@ -515,9 +519,9 @@ export class VenusRuntime extends EventEmitter {
 		simulator.driver.setCsrRegisterByName(name, twoComplementInt);
 	}
 
-	/** True while the simulator runs, i.e. while its state must not be edited. */
+	/** True while this runtime has a scheduled/active run loop. */
 	public isRunning(): boolean {
-		return simulator.driver.currentlyRunning();
+		return this._runTimer !== null;
 	}
 
 	/**
@@ -648,7 +652,7 @@ export class VenusRuntime extends EventEmitter {
 
 	/** Pause a running program without terminating the debug session. */
 	public pause() {
-		if (simulator.driver.timer == null) {
+		if (this._runTimer === null) {
 			// Nothing is running: do not latch a pause flag that would abort a
 			// later run and make the following continue look like a no-op.
 			return;
@@ -659,9 +663,9 @@ export class VenusRuntime extends EventEmitter {
 
 	/** Stops the scheduled run loop without reporting a stop to the frontend. */
 	private cancelRun() {
-		if (simulator.driver.timer != null) {
-			clearTimeout(simulator.driver.timer);
-			simulator.driver.timer = null;
+		if (this._runTimer !== null) {
+			clearTimeout(this._runTimer);
+			this._runTimer = null;
 		}
 	}
 
@@ -687,7 +691,7 @@ export class VenusRuntime extends EventEmitter {
 
 	/** This starts a long running code sequence, for example when clickling continue in the UI */
 	public initiateRun(escapeCondition: EscapeCondidtion) {
-        if (simulator.driver.timer != null) {
+        if (this._runTimer !== null) {
 			// A run loop is already scheduled. A duplicate resume/step request
 			// must not stop the program or emit a bogus stop event: the target
 			// is already running exactly as requested.
@@ -698,20 +702,20 @@ export class VenusRuntime extends EventEmitter {
 				switch (escapeCondition) {
 					case EscapeCondidtion.continue:
 						this.runStep(); // walk past breakpoint
-                		simulator.driver.timer = setTimeout(this.runStart.bind(this), VenusRuntime._timeoutTime, EscapeCondidtion.continue);
+                		this._runTimer = setTimeout(this.runStart.bind(this), VenusRuntime._timeoutTime, EscapeCondidtion.continue);
 						break;
 					case EscapeCondidtion.stepOver:
 						let desiredStackDepth = this._functionStack.length; // Need to set desired stack depth before stepping. Stack size can change when stepping
 						this.runStep(); // walk past breakpoint
-						simulator.driver.timer = setTimeout(this.runStart.bind(this), VenusRuntime._timeoutTime, EscapeCondidtion.stepOver, desiredStackDepth);
+						this._runTimer = setTimeout(this.runStart.bind(this), VenusRuntime._timeoutTime, EscapeCondidtion.stepOver, desiredStackDepth);
 						break;
 					case EscapeCondidtion.stepOut:
 						let desStackDepth = this._functionStack.length - 1; // Need to set desired stack depth before stepping. Stack size can change when stepping
 						this.runStep(); // walk past breakpoint
 						if (desStackDepth <= 0) { // If we are in the main function we can't step out, we run with continue. TODO: Evaluate if this is the wanted behaviour
-							simulator.driver.timer = setTimeout(this.runStart.bind(this), VenusRuntime._timeoutTime, EscapeCondidtion.continue);
+							this._runTimer = setTimeout(this.runStart.bind(this), VenusRuntime._timeoutTime, EscapeCondidtion.continue);
 						} else {
-							simulator.driver.timer = setTimeout(this.runStart.bind(this), VenusRuntime._timeoutTime, EscapeCondidtion.stepOut, desStackDepth);
+							this._runTimer = setTimeout(this.runStart.bind(this), VenusRuntime._timeoutTime, EscapeCondidtion.stepOut, desStackDepth);
 						}
 						break;
 				}
@@ -762,7 +766,7 @@ export class VenusRuntime extends EventEmitter {
                 cycles++;
             }
 
-            simulator.driver.timer = setTimeout(this.runStart.bind(this), VenusRuntime._timeoutTime, escapeCondition, wantedStackDepth);
+            this._runTimer = setTimeout(this.runStart.bind(this), VenusRuntime._timeoutTime, escapeCondition, wantedStackDepth);
         } catch (e) {
             this.runEnd();
             simulator.driver.handleError("RunStart", e);

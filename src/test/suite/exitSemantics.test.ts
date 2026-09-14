@@ -9,7 +9,7 @@ import { DapMessage, DebugTranscript } from './debugSupport';
  *
  *   - a finished program reports the simulator's exit status exactly once, as a
  *     DAP `exited` event, and always before `terminated`;
- *   - `ecall` 10 finishes with 0, `ecall` 17 with the status in a0;
+ *   - `ecall` 10 finishes with 0, `ecall` 17 with the status in a1 (a0 holds the ecall id);
  *   - a launch that never assembled (missing `.import`, missing program file)
  *     or a program that is stopped before exiting reports no exit status at all,
  *     so no stale code from an earlier run can leak into the session.
@@ -89,7 +89,7 @@ suite('CS61C Venus exit semantics acceptance', () => {
 		await assertSingleExitBeforeTermination(0);
 	});
 
-	test('ecall 17: the status in a0 is reported as the exit code', async () => {
+	test('ecall 17: the status in a1 is reported as the exit code', async () => {
 		await launch(path.join(driverRoot, 'exit_17.s'), false);
 		await assertSingleExitBeforeTermination(17);
 	});

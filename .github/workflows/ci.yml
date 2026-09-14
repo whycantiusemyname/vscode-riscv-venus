@@ -92,6 +92,9 @@ jobs:
       - name: Type-check extension and acceptance tests
         run: npm run compile
 
+      - name: Verify the debugger host file I/O wiring
+        run: node test/native/host-file-io-wiring.test.js
+
       - name: Verify native Project 2 host file I/O
         run: node test/native/host-file-io.test.js
         env:

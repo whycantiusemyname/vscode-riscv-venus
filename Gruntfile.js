@@ -3,9 +3,9 @@ module.exports = function(grunt) {
     // If permission denied run in terminal (for MacOS): chmod 755 gradlew
     let command;
     if (process.platform === "win32") {
-        command = 'gradlew build';
+        command = 'gradlew assemble';
     } else if (process.platform === "linux" || process.platform === "darwin") {
-        command = './gradlew build'
+        command = './gradlew assemble'
     }
     grunt.initConfig({
         exec: {

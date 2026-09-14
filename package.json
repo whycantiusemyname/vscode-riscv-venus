@@ -166,7 +166,7 @@
 				"riscv-venus.course.workingDirectory": {
 					"type": "string",
 					"default": "",
-					"description": "Working directory for the course JAR. Empty uses the folder of the .s file. When set, it is also passed to Venus as -wd."
+					"description": "Working directory the course JAR runs in (the child process cwd, like framework.py's cwd=test-src). Empty uses the folder of the .s file. Venus' own -wd is not passed because it rejects absolute host paths."
 				},
 				"riscv-venus.course.programArgs": {
 					"type": "array",

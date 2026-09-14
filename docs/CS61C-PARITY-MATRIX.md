@@ -184,11 +184,11 @@ Proj2 `src/utils.s:5-18` 显式定义课程使用的全部编号：
 | 14 | **文件 I/O（真实磁盘）** | `read_matrix.s`/`write_matrix.s`；`tests/*/*.bin` | `FilesHandler.kt` → `sim.VFS`（localStorage 后端，`VirtualFileSystem.kt`） | ❌ **Proj2 头号 gap**：读写不落宿主磁盘 |
 | 15 | **`-cc` / `--callingConvention`** | `lab04/index.html:541-543`；`venus-reference:483-576` | `src/` 无任何实现，仅 `fake.index.html.ts:52` 一个死按钮 | ❌ Lab4 全部依赖 |
 | 16 | **`-mc` / `-mcv` memcheck** | `lab03` memcheck 小节；`venus-reference:594-602` | `src/` 无任何实现 | ❌ |
-| 17 | **`--coverageFile`** | `framework.py:64`；`part-a/index.html:691`（`bash test.sh coverage`） | `riscv-venus.course.coverageFile` → `venusCourseArgs.ts` 在 `-ms` 之后、`-wd` 之前发 `--coverageFile <path>`（相对路径按运行目录解析，`venusCourseCommands.ts`）；`courseVenus.test.ts` 断言 argv；`scripts/ci/venus-course-parity.js` 的 `checkCoverageFile` 对比直跑与桥接写出的 coverage map | ✅ |
+| 17 | **`--coverageFile`** | `framework.py:64`；`part-a/index.html:691`（`bash test.sh coverage`） | `riscv-venus.course.coverageFile` → `venusCourseArgs.ts` 在 `-ms` 之后、程序路径之前发 `--coverageFile <path>`（相对路径按运行目录解析，`venusCourseCommands.ts`）；`courseVenus.test.ts` 断言 argv；`scripts/ci/venus-course-parity.js` 的 `checkCoverageFile` 对比直跑与桥接写出的 coverage map | ✅ |
 | 18 | **`--def` 钩子注入** | `framework.py:473`；`proj2/src/utils.s:152,172,276` hook 注释 | `riscv-venus.course.defines` → 合并为**单个** `--def`，多条目以 `;` 连接（JAR `Driver` 的 value action 是赋值语义，重复该 flag 会覆盖前一次列表）；`defs_hook.s` 差分用例证明两个 define 同时生效（打印 7 与 9，未注入时为 3 与 5） | ✅ |
 | 19 | `--immutableText` | `framework.py:21` | `simSettings.mutableText`（`venusRuntime.ts:153-155`），默认 `true` 与课程默认相反 | 🟡 语义存在但默认值冲突 |
 | 20 | `--maxsteps` / `-ms` | `framework.py:21` | `simSettings.maxSteps`（`venusRuntime.ts:162-164`；`venusDebug.ts:884`） | ✅ |
-| 21 | `-wd` 工作目录 | `scripts/venus.ps1`；`framework.py:47` | 无；靠 `program` 路径推断 | ❌ 影响 `test-src/` 相对路径 |
+| 21 | 工作目录（`framework.py:47` 的 `cwd=test-src`） | `framework.py:47`；`scripts/venus.ps1` | `riscv-venus.course.workingDirectory` → 解析为绝对路径后作为**子进程 cwd**；JAR 自身的 `-wd`/`--workingDirectory` 会拒绝绝对宿主路径（差分实测），因此不再发送 | ✅ |
 | 22 | 测试脚本集成 | `test.sh`；`proj2/.vscode/tasks.json` | 由外部 task 调用 Git Bash，插件无参与 | ✅ 无需插件支持 |
 | 23 | 构建可复现 | — | 子模块 `src/runtime/venus` 未初始化、无 `node_modules`、无 `dist/` | ❌ **阻断项** |
 

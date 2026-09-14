@@ -70,9 +70,11 @@ the exit code, the combined output, and the host files that were written:
 - `--def` define substitution (`defs_hook.s` prints 7/5 without defines and 7/9
   with both hooks injected) and the coverage map `--coverageFile` writes, which
   must be identical for the direct JAR run and the bridged run;
-- argv entries containing spaces and flag-shaped arguments;
-- program paths and working directories containing spaces, including `-wd`, and
-  a relative `workingDirectory` resolved against the project root;
+- argv entries containing spaces, including a flag-shaped argument the JAR
+  consumes after the file name (the documented Venus rule framework.py avoids);
+- program paths and working directories containing spaces, including a relative
+  `workingDirectory` resolved against the project root and used as the child
+  cwd (Venus' own `-wd` rejects absolute host paths, so it is never emitted);
 - `ecall 17` exit codes (0, 42, and negative via `ecall 5` atoi), an assembler
   error, and a missing program file;
 - Project 2 host file I/O (`ecall` 13/14/15/16/18/19/20) writing a relative file

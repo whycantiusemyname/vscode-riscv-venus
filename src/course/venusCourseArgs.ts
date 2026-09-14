@@ -11,7 +11,6 @@ import * as path from 'path';
  *   -mc,  --memcheck           Memory checks for unallocated stack/heap memory.
  *   -mcv, --memcheckVerbose    Verbose version of --memcheck.
  *   -ms,  --maxsteps           Max number of steps to allow (negative = no limit).
- *   -wd,  --workingDirectory   Change the working directory of Venus.
  *   -it,  --immutableText      Error when the text segment is modified.
  *   -eoe, --ecallOnlyExit      Exit only on an ecall.
  *   -ahs, --AllowHSAccess      Allow load/store between stack and heap (incompatible with -mc/-mcv).
@@ -20,6 +19,11 @@ import * as path from 'path';
  *   --def <k=v>[;<k=v>...]     Pre-define assembler tokens, e.g. the Project 2
  *                              `#MALLOC_RETURN_HOOK=li a0 0` fail-injection hooks.
  *                              One `--def` carries the `;`-separated list.
+ *
+ * The JAR's `-wd`/`--workingDirectory` is deliberately not emitted: it rejects
+ * the absolute host path the bridge resolves, and the child process cwd already
+ * implements the same behaviour - `framework.py:47` runs Venus with
+ * `cwd=test-src` and never passes `-wd`.
  *
  * Positional arguments are `file` followed by `simulatorArgs`, i.e. the
  * arguments handed to the simulated program. Venus takes everything after the
@@ -40,12 +44,11 @@ export interface VenusCourseInvocation extends VenusCourseFlags {
 	/** Absolute path of the `.s` file to assemble and simulate. */
 	program: string;
 	/**
-	 * Working directory of the JVM process. Forwarded to Venus through `-wd`
-	 * when `passWorkingDirectoryFlag` is set.
+	 * Working directory of the JVM process. `framework.py:47` runs Venus with
+	 * `cwd=test-src`, so the bridge spawns the JAR there; Venus' own `-wd` is
+	 * never used because it rejects absolute host paths.
 	 */
 	workingDirectory?: string;
-	/** Emit `-wd <workingDirectory>` in addition to setting the process cwd. */
-	passWorkingDirectoryFlag?: boolean;
 	/** Arguments handed to the simulated program (`a0`/`a1` = argc/argv). */
 	programArgs?: string[];
 	/** Emit `--coverageFile <path>`, the execution-count map Project 2 reads. */
@@ -212,10 +215,6 @@ export function buildVenusJarArgv(
 		javaArgs.push('--def', defines.join(';'));
 	}
 
-	if (invocation.workingDirectory && invocation.passWorkingDirectoryFlag) {
-		javaArgs.push('-wd', invocation.workingDirectory);
-	}
-
 	javaArgs.push(invocation.program);
 
 	javaArgs.push(...(invocation.programArgs || []));
@@ -273,8 +272,7 @@ export function selectProjectRoot(
  * Without an explicit setting it is the folder holding the `.s` file. A
  * configured path may be relative - Project 2 runs Venus from `test-src` - so
  * it is resolved against `projectRoot` (the deepest workspace folder that
- * contains the program) before it is used as the child process cwd and as the
- * value of `-wd`.
+ * contains the program) before it is used as the child process cwd.
  */
 export function resolveWorkingDirectory(
 	explicitWorkingDirectory: string | undefined,

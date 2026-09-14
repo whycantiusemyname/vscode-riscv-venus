@@ -223,22 +223,29 @@ function buildCases(sandbox, jarPath) {
 		expect: { exitCode: 0, stdoutContains: ['hello from venus'] }
 	});
 
-	add('run: argv with spaces and flag-shaped arguments', {
+	add('run: argv with spaces, where the JAR consumes a flag-shaped argument', {
 		program: fixture('argv.s'),
 		programDir: 'spaced',
 		programArg: 'absolute',
 		cwd: 'spaced',
 		directFlags: [],
 		invocation: {},
-		programArgs: ['alpha', 'beta gamma', 'quoted "arg"', '-it', ''],
+		// Venus takes everything after the file as simulator args but still
+		// consumes flag-shaped entries: `venus-reference` says "Flags to
+		// configure Venus assembly or simulation behavior can be passed after
+		// the name of the file. These arguments will be consumed by the
+		// simulator and not passed to the program". The pinned JAR therefore
+		// drops `-it` and shifts `omega` into argv[4]; framework.py relies on
+		// the same rule by rejecting program args that start with `-`.
+		programArgs: ['alpha', 'beta gamma', 'quoted "arg"', '-it', 'omega'],
 		expect: {
 			exitCode: 0,
 			stdoutContains: [
-				'argc=6',
+				'argc=5',
 				'argv[1]=alpha',
 				'argv[2]=beta gamma',
 				'argv[3]=quoted "arg"',
-				'argv[4]=-it'
+				'argv[4]=omega'
 			]
 		}
 	});
@@ -314,14 +321,18 @@ function buildCases(sandbox, jarPath) {
 	});
 
 	// -- memcheck ----------------------------------------------------------
-	add('-mc: allocated heap access is silent', {
+	add('-mc: the course malloc wrapper registers the block, so memcheck is silent', {
 		program: fixture('mc_good.s'),
 		programDir: 'spaced',
 		programArg: 'absolute',
 		cwd: 'spaced',
 		directFlags: ['-mc'],
 		invocation: { memcheck: true },
-		expect: { exitCode: 0, notStdoutContains: ['[memcheck] Invalid memory access'] }
+		expect: {
+			exitCode: 0,
+			stdoutContains: ['heap roundtrip ok'],
+			notStdoutContains: ['[memcheck] Invalid memory access']
+		}
 	});
 
 	add('-mc: unallocated stack read is reported', {
@@ -486,15 +497,16 @@ function buildCases(sandbox, jarPath) {
 		}
 	});
 
-	add('file io: -wd redirects host file paths', {
+	add('file io: the process working directory redirects host file paths', {
 		program: fixture('file_io.s'),
 		programDir: 'plain',
 		programArg: 'absolute',
-		// The extension spawns the JVM in the working directory and also passes
-		// -wd, so a working directory with spaces has to survive both routes.
+		// framework.py:47 runs Venus with cwd=test-src and never passes -wd; the
+		// pinned JAR rejected the absolute -wd the bridge used to add, so the
+		// working directory is the child process cwd on both sides.
 		cwd: 'spaced',
-		directFlags: ['-wd', spacedDir],
-		invocation: { workingDirectory: spacedDir, passWorkingDirectoryFlag: true },
+		directFlags: [],
+		invocation: { workingDirectory: spacedDir },
 		expect: {
 			exitCode: 0,
 			files: [{
@@ -506,14 +518,19 @@ function buildCases(sandbox, jarPath) {
 	});
 
 	// -- unicode -----------------------------------------------------------
-	add('run: non-ASCII output decodes identically', {
+	// The JAR's handling of a non-ASCII `.string` literal depends on the JVM's
+	// default charset; on some JDKs it reports an assembler error and exits
+	// non-zero. Whatever the platform does, the direct run and the bridge have
+	// to agree on argv, exit status and output bytes, so this case asserts only
+	// that cross-run parity.
+	add('run: non-ASCII source and output stay byte-identical', {
 		program: fixture('unicode.s'),
 		programDir: 'spaced',
 		programArg: 'absolute',
 		cwd: 'spaced',
 		directFlags: [],
 		invocation: {},
-		expect: { exitCode: 0, stdoutContains: ['unicode:'] }
+		expect: {}
 	});
 
 	return cases;
@@ -716,7 +733,8 @@ function checkJarDiscovery(report, bridge, context) {
 /**
  * `riscv-venus.course.workingDirectory` may be relative (Project 2 uses
  * `test-src`). It must be resolved to an absolute path before it is handed to
- * `spawn` as the child cwd and to Venus as `-wd`.
+ * `spawn` as the child cwd; Venus' own `-wd` rejected that absolute path, so the
+ * process cwd is the only mechanism.
  */
 async function checkRelativeWorkingDirectory(report, bridge, context) {
 	info('\n[working directory] a relative working directory resolves against the project root');
@@ -743,8 +761,7 @@ async function checkRelativeWorkingDirectory(report, bridge, context) {
 
 	const plan = bridge.args.buildVenusJarArgv(context.jarPath, {
 		program,
-		workingDirectory: resolved,
-		passWorkingDirectoryFlag: true
+		workingDirectory: resolved
 	}, context.java);
 	const result = await bridge.process.runVenusCourseProcess(context.java, plan.javaArgs, { cwd: resolved });
 	report.assert('working directory: the program runs from the resolved directory',

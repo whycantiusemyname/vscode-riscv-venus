@@ -113,10 +113,11 @@ suite('Venus course JAR bridge', () => {
 		);
 	});
 
-	test('keeps -wd and the working directory as separate argv entries so spaces survive', () => {
-		const workingDirectory = absolute('projects', 'my project');
-		const javaArgs = build({ workingDirectory, passWorkingDirectoryFlag: true });
-		assert.deepStrictEqual(javaArgs, ['-jar', JAR, '-wd', workingDirectory, PROGRAM]);
+	test('never passes -wd: the JAR rejects absolute host working directories', () => {
+		// The working directory is the child process cwd (framework.py:47); the
+		// JAR's own -wd rejected the absolute path during differential acceptance.
+		const javaArgs = build({ workingDirectory: absolute('projects', 'my project') });
+		assert.deepStrictEqual(javaArgs, ['-jar', JAR, PROGRAM]);
 	});
 
 	test('places Venus flags before the file and the file before program args', () => {
@@ -129,7 +130,6 @@ suite('Venus course JAR bridge', () => {
 			coverageFile: absolute('coverage with spaces.txt'),
 			defines: ['#MALLOC_RETURN_HOOK=li a0 0'],
 			workingDirectory: absolute('wd with spaces'),
-			passWorkingDirectoryFlag: true,
 			programArgs: ['one']
 		});
 		assert.deepStrictEqual(javaArgs, [
@@ -137,7 +137,6 @@ suite('Venus course JAR bridge', () => {
 			'-cc', '-mcv', '-it', '-eoe', '-ms', '5',
 			'--coverageFile', absolute('coverage with spaces.txt'),
 			'--def', '#MALLOC_RETURN_HOOK=li a0 0',
-			'-wd', absolute('wd with spaces'),
 			PROGRAM,
 			'one'
 		]);

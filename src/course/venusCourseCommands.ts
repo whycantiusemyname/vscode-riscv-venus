@@ -111,7 +111,6 @@ function buildInvocation(
 		coverageFile,
 		defines: settings.defines || [],
 		workingDirectory: explicitWorkingDirectory,
-		passWorkingDirectoryFlag: Boolean(explicitWorkingDirectory),
 		...venusCourseModeDefinition(mode).flags
 	};
 }

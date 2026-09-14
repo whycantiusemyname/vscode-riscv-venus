@@ -41,15 +41,15 @@ jobs:
       - name: Type-check extension and acceptance tests
         run: npm run compile
 
-      - name: Locate the runner's preinstalled VS Code
+      - name: Download the Windows VS Code test host
         shell: pwsh
         run: |
-          $candidates = @(
-            'C:\Program Files\Microsoft VS Code\Code.exe',
-            'C:\Program Files (x86)\Microsoft VS Code\Code.exe'
-          )
-          $codePath = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
-          if (-not $codePath) { throw 'The Windows runner does not contain a VS Code installation.' }
+          $archive = Join-Path $env:RUNNER_TEMP 'vscode-win32-x64.zip'
+          $installDir = Join-Path $env:RUNNER_TEMP 'vscode-win32-x64'
+          Invoke-WebRequest -Uri 'https://update.code.visualstudio.com/latest/win32-x64-archive/stable' -OutFile $archive
+          Expand-Archive -LiteralPath $archive -DestinationPath $installDir
+          $codePath = Join-Path $installDir 'Code.exe'
+          if (-not (Test-Path -LiteralPath $codePath)) { throw 'The VS Code test host archive is invalid.' }
           "VSCODE_EXECUTABLE_PATH=$codePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Run real VS Code extension-host acceptance tests

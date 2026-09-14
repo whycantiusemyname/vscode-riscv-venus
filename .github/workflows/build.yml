@@ -41,6 +41,9 @@ jobs:
       - name: Type-check extension and acceptance tests
         run: npm run compile
 
+      - name: Run headless CS61C course parity tests
+        run: npm run test:course
+
       - name: Download the Windows VS Code test host
         shell: pwsh
         run: |

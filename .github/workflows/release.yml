@@ -5,21 +5,36 @@ on:
 
 name: Release extension
 
+permissions:
+  contents: write
+
 jobs:
   build:
-    name: Release extension
-    runs-on: ubuntu-latest
+    name: Release extension (Ubuntu 22.04 / JDK 8 / Node 20)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v5
         with:
-          submodules: 'recursive'
-      - name: Use Node.js
-        uses: actions/setup-node@v4
+          submodules: recursive
+      - name: Use JDK 8 for the pinned Gradle 4.9 build
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '8'
+      - name: Use Node.js 20
+        uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Make the Venus Gradle wrapper executable
+        shell: bash
+        run: chmod +x src/runtime/venus/gradlew
       - name: Install dependencies
-        run: npm install
-      - name: Build venus
-        run: npx grunt buildvenus
+        run: npm ci
+      - name: Build Venus core and extension bundle
+        run: npm run compileAll
       - name: Build extension
         run: npm run compile
       - name: Package extension
@@ -41,7 +56,7 @@ jobs:
           name: Release ${{ env.version }}
           draft: false
           prerelease: ${{ env.is_prerelease }}
-          files: ./**.vsix
+          files: '*.vsix'
       - name: Vscode release plugin
         if: ${{ !contains(github.ref_name, '-') }}
         env:

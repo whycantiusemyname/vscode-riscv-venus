@@ -1,18 +1,30 @@
 name: Build and accept Venus
 
+# The Ubuntu job below is the authoritative build/test/package path for the
+# CS61C native Venus extension. A VSIX is only accepted after the pinned Venus
+# core builds, TypeScript type-checks, the course parity suite passes headless,
+# and a real VS Code extension host has debugged the Project 2-shaped fixture.
+
 on:
   push:
-    branches: ['codex/cs61c-native-venus']
+    branches:
+      - codex/cs61c-native-venus
+      - codex/venus-parity-integration
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
 
+env:
+  # Pinned so the extension host is reproducible instead of tracking "latest".
+  VSCODE_TEST_VERSION: '1.85.2'
+
 jobs:
   build-and-accept:
+    name: Ubuntu 22.04 / JDK 8 / Node 20
     runs-on: ubuntu-22.04
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - name: Check out source and Venus core
@@ -32,6 +44,39 @@ jobs:
           node-version: '20'
           cache: npm
 
+      - name: Record the pinned Venus core revision
+        id: venus-core
+        shell: bash
+        run: echo "revision=$(git -C src/runtime/venus rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the Gradle wrapper and dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-jdk8-${{ runner.os }}-${{ steps.venus-core.outputs.revision }}
+
+      - name: Verify the pinned JDK 8 and Node 20 toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          java -version
+          node --version
+          npm --version
+          if [ -z "${JAVA_HOME:-}" ]; then
+            echo "JAVA_HOME was not set by actions/setup-java" >&2
+            exit 1
+          fi
+          echo "JAVA_HOME=${JAVA_HOME}"
+
+      - name: Make the Venus Gradle wrapper executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x src/runtime/venus/gradlew
+          test -x src/runtime/venus/gradlew
+
       - name: Install JavaScript dependencies
         run: npm ci
 
@@ -41,10 +86,38 @@ jobs:
       - name: Type-check extension and acceptance tests
         run: npm run compile
 
+      - name: Run headless CS61C course parity tests
+        run: npm run test:course
+
+      - name: Ensure xvfb is available
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v xvfb-run >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y xvfb
+          fi
+
+      - name: Download the pinned Linux VS Code test host
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="${RUNNER_TEMP}/vscode-linux-x64.tar.gz"
+          install_dir="${RUNNER_TEMP}/vscode-linux-x64"
+          curl --fail --location --silent --show-error \
+            "https://update.code.visualstudio.com/${VSCODE_TEST_VERSION}/linux-x64/stable" \
+            --output "${archive}"
+          mkdir -p "${install_dir}"
+          tar -xzf "${archive}" -C "${install_dir}"
+          code="${install_dir}/VSCode-linux-x64/code"
+          if [ ! -x "${code}" ]; then
+            echo "The VS Code test host archive is invalid: ${code} is missing" >&2
+            exit 1
+          fi
+          echo "VSCODE_EXECUTABLE_PATH=${code}" >> "${GITHUB_ENV}"
+
       - name: Run real VS Code extension-host acceptance tests
         run: xvfb-run -a npm test
-        env:
-          VSCODE_VERSION: stable
 
       - name: Package VSIX
         run: npm run package

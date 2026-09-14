@@ -146,6 +146,11 @@ function installBrowserGlobals() {
     global.window = win;
     global.document = win.document;
     global.localStorage = storage;
+    // Match the extension's riscvSimulator bootstrap before loading the raw Kotlin/JS core.
+    // Driver constructs LocalStorage immediately, so the external Kotlin class must already be
+    // visible on the Node global object when venus.js is required.
+    const { LocalStorageManager } = require(path.join(__dirname, '..', '..', 'src', 'runtime', 'helpers.js'));
+    global.LocalStorageManager = LocalStorageManager;
     try {
         Object.defineProperty(win, 'localStorage', { value: storage, configurable: true, writable: true });
     } catch (e) {
@@ -523,11 +528,14 @@ main:
         ecall
 `;
 
-// Run with host mode disabled: the VFS backend must still accept ecall 13/14/15/16, and no host
-// file may appear. This is the guard for the browser/legacy VFS path.
-const programVfsOnly = `
+// Run with host mode disabled against an existing absolute file. The legacy native VFS probes
+// absolute paths through Node fs before keeping subsequent writes in memory; using an existing
+// file avoids turning that legacy probe into an ENOENT while still proving the host bridge stays
+// inert (the real host file must remain byte-for-byte unchanged).
+function programVfsOnly(absolutePath) {
+    return `
         .data
-path:   .string "vfs-only.bin"
+path:   .string "${absolutePath}"
 buf:    .space 8
 
         .text
@@ -555,6 +563,7 @@ main:
         li a0, 10
         ecall
 `;
+}
 
 // Opens an absolute path (inside a directory with spaces) and writes the first byte back to a
 // relative path, which proves both kinds of path resolution in one run.
@@ -666,10 +675,14 @@ test('opens absolute paths, including directories with spaces', () => {
     assert.deepStrictEqual(readHostFile('abs-out.bin'), [0x80], 'abs-out.bin');
 });
 
-test('host mode disabled keeps the VFS backend and touches no host file', () => {
-    const result = run(programVfsOnly, { hostMode: false });
+test('host mode disabled keeps VFS writes off the host file', () => {
+    const original = [0xaa, 0xbb, 0xcc];
+    writeHostFile('vfs-only.bin', original);
+    const absolutePath = hostFile('vfs-only.bin').replace(/\\/g, '/');
+    const result = run(programVfsOnly(absolutePath), { hostMode: false });
     assert.strictEqual(result.exitcode, 0, 'exit code');
-    assert.ok(!hostFileExists('vfs-only.bin'), 'the VFS backend must not write to the host');
+    assert.deepStrictEqual(readHostFile('vfs-only.bin'), original,
+        'legacy VFS writes must not escape to the host while host mode is disabled');
 });
 
 /* ------------------------------------------------------------------------------------------- *

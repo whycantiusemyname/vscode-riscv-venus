@@ -1,28 +1,67 @@
-on: [push, pull_request]
+name: Windows build and acceptance
 
-name: Build extension
+on:
+  push:
+    branches: ['codex/cs61c-native-venus']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  build:
-    name: Build and package
-    runs-on: windows-latest
+  windows-build-and-accept:
+    runs-on: windows-2022
+    timeout-minutes: 30
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v2
-      with:
-        submodules: 'recursive'
-    - name: Use Node.js
-      uses: actions/setup-node@v4
-    - name: Install dependencies
-      run: npm install
-    - name: Build venus
-      run: npx grunt buildvenus
-    - name: Build extension
-      run: npm run compile
-    - name: Package extension
-      run: npm run package    
-    - run: mv riscv-venus-*.vsix riscv-venus.vsix
-    - uses: actions/upload-artifact@v2
-      with:
-        name: vsix-package
-        path: riscv-venus.vsix
+      - name: Check out source and Venus core
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Use JDK 8 for the pinned Gradle 4.9 build
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '8'
+
+      - name: Use Node.js 20
+        uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Build Venus core and extension bundle
+        run: npm run compileAll
+
+      - name: Type-check extension and acceptance tests
+        run: npm run compile
+
+      - name: Run real VS Code extension-host acceptance tests
+        run: npm test
+        env:
+          VSCODE_VERSION: stable
+
+      - name: Package VSIX
+        run: npm run package
+
+      - name: Upload Windows-built VSIX
+        uses: actions/upload-artifact@v5
+        with:
+          name: cs61c-riscv-venus-windows-${{ github.sha }}
+          path: '*.vsix'
+          if-no-files-found: error
+
+      - name: Upload VS Code test logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: vscode-windows-test-logs-${{ github.sha }}
+          path: |
+            .vscode-test/**/logs/**
+            mock-debug.txt
+          if-no-files-found: ignore

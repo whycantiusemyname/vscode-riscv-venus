@@ -1,3 +1,4 @@
+import * as path from 'path';
 import * as vscode from 'vscode';
 
 import {
@@ -21,6 +22,8 @@ export interface VenusCourseSettings {
 	javaPath?: string;
 	workingDirectory?: string;
 	programArgs?: string[];
+	coverageFile?: string;
+	defines?: string[];
 	maxSteps?: number;
 	immutableText?: boolean;
 	ecallOnlyExit?: boolean;
@@ -34,6 +37,8 @@ export function readVenusCourseSettings(): VenusCourseSettings {
 		javaPath: configuration.get<string>('javaPath'),
 		workingDirectory: configuration.get<string>('workingDirectory'),
 		programArgs: configuration.get<string[]>('programArgs') || [],
+		coverageFile: configuration.get<string>('coverageFile'),
+		defines: configuration.get<string[]>('defines') || [],
 		// Defaults mirror the Project 2 framework: --immutableText and
 		// --maxsteps -1 (no upper bound on the number of steps).
 		maxSteps: configuration.get<number>('maxSteps') ?? -1,
@@ -87,6 +92,12 @@ function buildInvocation(
 		)
 		: undefined;
 
+	// The JAR resolves --coverageFile against the directory it runs in, so a
+	// relative setting is resolved the same way the child process cwd is.
+	const coverageFile = settings.coverageFile && settings.coverageFile.length > 0
+		? path.resolve(resolveWorkingDirectory(explicitWorkingDirectory, programPath), settings.coverageFile)
+		: undefined;
+
 	return {
 		program: programPath,
 		callingConvention: false,
@@ -97,6 +108,8 @@ function buildInvocation(
 		ecallOnlyExit: settings.ecallOnlyExit === true,
 		maxSteps: settings.maxSteps,
 		programArgs: settings.programArgs || [],
+		coverageFile,
+		defines: settings.defines || [],
 		workingDirectory: explicitWorkingDirectory,
 		passWorkingDirectoryFlag: Boolean(explicitWorkingDirectory),
 		...venusCourseModeDefinition(mode).flags

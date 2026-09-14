@@ -184,13 +184,19 @@ Proj2 `src/utils.s:5-18` 显式定义课程使用的全部编号：
 | 14 | **文件 I/O（真实磁盘）** | `read_matrix.s`/`write_matrix.s`；`tests/*/*.bin` | `FilesHandler.kt` → `sim.VFS`（localStorage 后端，`VirtualFileSystem.kt`） | ❌ **Proj2 头号 gap**：读写不落宿主磁盘 |
 | 15 | **`-cc` / `--callingConvention`** | `lab04/index.html:541-543`；`venus-reference:483-576` | `src/` 无任何实现，仅 `fake.index.html.ts:52` 一个死按钮 | ❌ Lab4 全部依赖 |
 | 16 | **`-mc` / `-mcv` memcheck** | `lab03` memcheck 小节；`venus-reference:594-602` | `src/` 无任何实现 | ❌ |
-| 17 | **`--coverageFile`** | `framework.py:64`；`test.sh coverage` | `src/` 无任何实现 | ❌ |
-| 18 | **`--def` 钩子注入** | `framework.py:473`；`proj2/src/utils.s` hook 注释 | `src/` 无任何实现 | ❌ 失败注入用例无法复现 |
+| 17 | **`--coverageFile`** | `framework.py:64`；`part-a/index.html:691`（`bash test.sh coverage`） | `riscv-venus.course.coverageFile` → `venusCourseArgs.ts` 在 `-ms` 之后、`-wd` 之前发 `--coverageFile <path>`（相对路径按运行目录解析，`venusCourseCommands.ts`）；`courseVenus.test.ts` 断言 argv；`scripts/ci/venus-course-parity.js` 的 `checkCoverageFile` 对比直跑与桥接写出的 coverage map | ✅ |
+| 18 | **`--def` 钩子注入** | `framework.py:473`；`proj2/src/utils.s:152,172,276` hook 注释 | `riscv-venus.course.defines` → 每个条目发一对 `--def <key=value>`，原文透传；`src/test/fixtures/venus-course/defs_hook.s` 在差分测试中证明替换生效（有 define 打印 7，无 define 打印 3） | ✅ |
 | 19 | `--immutableText` | `framework.py:21` | `simSettings.mutableText`（`venusRuntime.ts:153-155`），默认 `true` 与课程默认相反 | 🟡 语义存在但默认值冲突 |
 | 20 | `--maxsteps` / `-ms` | `framework.py:21` | `simSettings.maxSteps`（`venusRuntime.ts:162-164`；`venusDebug.ts:884`） | ✅ |
 | 21 | `-wd` 工作目录 | `scripts/venus.ps1`；`framework.py:47` | 无；靠 `program` 路径推断 | ❌ 影响 `test-src/` 相对路径 |
 | 22 | 测试脚本集成 | `test.sh`；`proj2/.vscode/tasks.json` | 由外部 task 调用 Git Bash，插件无参与 | ✅ 无需插件支持 |
 | 23 | 构建可复现 | — | 子模块 `src/runtime/venus` 未初始化、无 `node_modules`、无 `dist/` | ❌ **阻断项** |
+
+> **更新（agent10 使用面扫描，2026）**：第 15-18 行原判缺失，现由课程 JAR 桥接命令
+> （`riscv-venus.course.run` / `.callingConvention` / `.memcheck` / `.memcheckVerbose`）
+> 以及 `riscv-venus.course.coverageFile` / `.defines` 设置提供，并在
+> `scripts/ci/venus-course-parity.js` 中以「直跑 JAR vs 桥接」差分验收；第 5/8/9/13/14/21
+> 行由本次集成分支的其他提交补齐（见 `CS61C-ACCEPTANCE.md`）。本表其余判定仍为基线时点结论。
 
 ---
 

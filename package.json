@@ -186,6 +186,19 @@
 					"type": "boolean",
 					"default": false,
 					"description": "Pass -ahs to allow accesses between stack and heap. Ignored when -mc/-mcv is active because the JAR rejects that combination."
+				},
+				"riscv-venus.course.coverageFile": {
+					"type": "string",
+					"default": "",
+					"description": "Pass --coverageFile with this path so Venus writes its per-line execution counts (the map `bash test.sh coverage` reads). A relative path is resolved against the working directory of the run."
+				},
+				"riscv-venus.course.defines": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"default": [],
+					"description": "Assembler defines passed as one --def per entry, in the JAR's key=value form, for example #MALLOC_RETURN_HOOK=li a0 0 as built by the Project 2 framework."
 				}
 			}
 		},

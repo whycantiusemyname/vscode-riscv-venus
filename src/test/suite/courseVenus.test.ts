@@ -82,6 +82,29 @@ suite('Venus course JAR bridge', () => {
 		assert.deepStrictEqual(build(), ['-jar', JAR, PROGRAM], 'no maxSteps means no -ms flag');
 	});
 
+	test('emits --coverageFile with the path kept as one argument', () => {
+		const coverageFile = absolute('test-src', 'coverage output.txt');
+		assert.deepStrictEqual(
+			build({ coverageFile }),
+			['-jar', JAR, '--coverageFile', coverageFile, PROGRAM]
+		);
+		assert.ok(!build().includes('--coverageFile'), 'no coverageFile means no flag');
+	});
+
+	test('emits one --def pair per define, in order, without splitting key=value', () => {
+		assert.deepStrictEqual(
+			build({ defines: ['#MALLOC_RETURN_HOOK=li a0 0', 'PRINT_ME=li a1 7'] }),
+			[
+				'-jar', JAR,
+				'--def', '#MALLOC_RETURN_HOOK=li a0 0',
+				'--def', 'PRINT_ME=li a1 7',
+				PROGRAM
+			]
+		);
+		assert.deepStrictEqual(build({ defines: [] }), ['-jar', JAR, PROGRAM], 'no defines means no flag');
+		assert.deepStrictEqual(build({ defines: [''] }), ['-jar', JAR, PROGRAM], 'empty entries are dropped');
+	});
+
 	test('passes program arguments positionally after the file, without a -- separator', () => {
 		assert.deepStrictEqual(
 			build({ programArgs: ['alpha', 'beta gamma', '-it'] }),
@@ -102,6 +125,8 @@ suite('Venus course JAR bridge', () => {
 			immutableText: true,
 			ecallOnlyExit: true,
 			maxSteps: 5,
+			coverageFile: absolute('coverage with spaces.txt'),
+			defines: ['#MALLOC_RETURN_HOOK=li a0 0'],
 			workingDirectory: absolute('wd with spaces'),
 			passWorkingDirectoryFlag: true,
 			programArgs: ['one']
@@ -109,6 +134,8 @@ suite('Venus course JAR bridge', () => {
 		assert.deepStrictEqual(javaArgs, [
 			'-jar', JAR,
 			'-cc', '-mcv', '-it', '-eoe', '-ms', '5',
+			'--coverageFile', absolute('coverage with spaces.txt'),
+			'--def', '#MALLOC_RETURN_HOOK=li a0 0',
 			'-wd', absolute('wd with spaces'),
 			PROGRAM,
 			'one'

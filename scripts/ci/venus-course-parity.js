@@ -428,6 +428,31 @@ function buildCases(sandbox, jarPath) {
 		expect: { exitCode: 0 }
 	});
 
+	// -- defines -----------------------------------------------------------
+	add('--def: the assembler substitutes the defined token', {
+		program: fixture('defs_hook.s'),
+		programDir: 'spaced',
+		programArg: 'absolute',
+		cwd: 'spaced',
+		directFlags: ['--def', '#PRINT_HOOK=li a1 7'],
+		invocation: { defines: ['#PRINT_HOOK=li a1 7'] },
+		expect: {
+			exitCode: 0,
+			stdoutContains: ['7'],
+			notStdoutContains: ['3']
+		}
+	});
+
+	add('--def off: the hook line stays a plain comment', {
+		program: fixture('defs_hook.s'),
+		programDir: 'spaced',
+		programArg: 'absolute',
+		cwd: 'spaced',
+		directFlags: [],
+		invocation: {},
+		expect: { exitCode: 0, stdoutContains: ['3'] }
+	});
+
 	// -- host file I/O -----------------------------------------------------
 	add('file io: relative paths land in the working directory', {
 		program: fixture('file_io.s'),
@@ -750,6 +775,62 @@ function checkCourseReporting(report, bridge) {
 		plainRun.ok === true, JSON.stringify(plainRun));
 }
 
+/**
+ * Project 2's `bash test.sh coverage` reads the map Venus writes through
+ * `--coverageFile`. The bridge has to forward the path (a relative setting is
+ * resolved against the working directory) and the JAR has to write the same map
+ * it writes for a direct `java -jar` invocation.
+ */
+async function checkCoverageFile(report, bridge, context) {
+	info('\n[coverage] --coverageFile reaches the JAR and writes the same map');
+	const project = path.join(context.sandbox.root, 'project with spaces');
+	const program = path.join(project, 'coverage.s');
+	fs.copyFileSync(path.join(FIXTURE_DIR, 'hello.s'), program);
+
+	const directFile = path.join(project, 'coverage direct.txt');
+	const bridgeFile = path.join(project, 'coverage bridge.txt');
+	removeFile(directFile);
+	removeFile(bridgeFile);
+
+	const direct = spawnSync(
+		context.java,
+		['-jar', context.jarPath, '--coverageFile', directFile, program],
+		{ cwd: project, encoding: 'utf8', timeout: 180000 }
+	);
+	if (direct.error) {
+		report.fail('coverage: direct java -jar baseline', String(direct.error));
+		return;
+	}
+	report.assert('coverage: the direct JAR run writes the coverage file',
+		direct.status === 0 && isFile(directFile), `exit ${direct.status}`);
+	if (!isFile(directFile)) { return; }
+
+	const plan = bridge.args.buildVenusJarArgv(
+		context.jarPath,
+		{ program, coverageFile: bridgeFile },
+		context.java
+	);
+	report.assert('coverage: the bridge emits --coverageFile before the program',
+		JSON.stringify(plan.javaArgs) === JSON.stringify(
+			['-jar', context.jarPath, '--coverageFile', bridgeFile, program]),
+		JSON.stringify(plan.javaArgs));
+
+	const bridged = await bridge.process.runVenusCourseProcess(context.java, plan.javaArgs, { cwd: project });
+	report.assert('coverage: the bridged run exits like the direct run',
+		bridged.exitCode === direct.status,
+		`direct=${direct.status} bridge=${bridged.exitCode}`);
+	report.assert('coverage: the bridged run writes the coverage file too',
+		isFile(bridgeFile), `expected ${bridgeFile}`);
+
+	const directText = isFile(directFile) ? fs.readFileSync(directFile, 'utf8') : '';
+	const bridgeText = isFile(bridgeFile) ? fs.readFileSync(bridgeFile, 'utf8') : '';
+	report.assert('coverage: both runs write the same coverage map',
+		normalise(bridgeText).length > 0 && normalise(directText) === normalise(bridgeText),
+		normalise(bridgeText).length === 0
+			? 'the coverage file is empty'
+			: firstDifference(directText, bridgeText));
+}
+
 // ---------------------------------------------------------------------------
 // entry point
 // ---------------------------------------------------------------------------
@@ -784,6 +865,7 @@ async function main() {
 	checkShellRoundTrip(report, bridge, context);
 	checkJarDiscovery(report, bridge, context);
 	await checkRelativeWorkingDirectory(report, bridge, context);
+	await checkCoverageFile(report, bridge, context);
 	checkCourseReporting(report, bridge);
 
 	const failures = report.failures;

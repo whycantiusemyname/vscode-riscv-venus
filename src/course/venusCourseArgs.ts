@@ -15,6 +15,10 @@ import * as path from 'path';
  *   -it,  --immutableText      Error when the text segment is modified.
  *   -eoe, --ecallOnlyExit      Exit only on an ecall.
  *   -ahs, --AllowHSAccess      Allow load/store between stack and heap (incompatible with -mc/-mcv).
+ *   --coverageFile <path>      Write Venus' per-line execution counts (the map
+ *                              `bash test.sh coverage` reads).
+ *   --def <key=value>          Pre-define an assembler token, e.g. the Project 2
+ *                              `#MALLOC_RETURN_HOOK=li a0 0` fail-injection hooks.
  *
  * Positional arguments are `file` followed by `simulatorArgs`, i.e. the
  * arguments handed to the simulated program. Venus takes everything after the
@@ -43,6 +47,14 @@ export interface VenusCourseInvocation extends VenusCourseFlags {
 	passWorkingDirectoryFlag?: boolean;
 	/** Arguments handed to the simulated program (`a0`/`a1` = argc/argv). */
 	programArgs?: string[];
+	/** Emit `--coverageFile <path>`, the execution-count map Project 2 reads. */
+	coverageFile?: string;
+	/**
+	 * Emit one `--def <entry>` per entry, in order. Each entry is the JAR's
+	 * `key=value` text, for example `#MALLOC_RETURN_HOOK=li a0 0` as the
+	 * Project 2 framework builds it.
+	 */
+	defines?: string[];
 }
 
 export interface VenusJarCandidateOptions {
@@ -182,6 +194,16 @@ export function buildVenusJarArgv(
 	// Project 2 framework passes, so only a non-numeric value omits the flag.
 	if (typeof invocation.maxSteps === 'number' && Number.isFinite(invocation.maxSteps)) {
 		javaArgs.push('-ms', String(invocation.maxSteps));
+	}
+
+	if (invocation.coverageFile) {
+		javaArgs.push('--coverageFile', invocation.coverageFile);
+	}
+
+	// One --def per entry, exactly as framework.py builds them: `--def` followed
+	// by the raw `key=value` text (the key may be a `#`-prefixed token).
+	for (const define of invocation.defines || []) {
+		if (define.length > 0) { javaArgs.push('--def', define); }
 	}
 
 	if (invocation.workingDirectory && invocation.passWorkingDirectoryFlag) {

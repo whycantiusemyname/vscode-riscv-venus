@@ -66,6 +66,7 @@ pwsh test/native/apply-host-file-io-patches.ps1 -Check   # verify the patches st
 pwsh test/native/apply-host-file-io-patches.ps1          # apply them
 npm run compileAll                           # rebuilds src/runtime/venus/build/kotlin-js-min/main
 node test/native/host-file-io.test.js        # acceptance test for ecalls 13/14/15/16
+node test/native/host-file-io-wiring.test.js # static check of the debugger opt in, no build
 ```
 
 The test skips (exit 0) when there is no compiled core, or when the compiled core has no
@@ -73,10 +74,13 @@ The test skips (exit 0) when there is no compiled core, or when the compiled cor
 `VENUS_REQUIRE_HOST_FILE_IO=1` to turn those skips into failures, which is what a CI job that
 applies the patches and rebuilds the core should do.
 
-The extension host opts in before a debug session starts, for example with
-`venus.Driver.setHostFileCwd(workspaceFolder)` followed by `venus.Driver.enableHostFileIO(true)`.
-`isHostFileIOEnabled()` reports whether the bridge is live. Nothing is enabled by default, so a
-browser or a Node session that does not opt in keeps the previous behaviour.
+The extension host wires this up for every native debug session: `src/venusRuntime.ts` calls
+`setHostFileCwd(dirname(program))` and then `enableHostFileIO(true)` while a launch is assembled,
+and `enableHostFileIO(false)` when the runtime stops, so the opt in lasts exactly as long as the
+debug session. Both calls are guarded with `typeof ... === 'function'`, which leaves an
+unpatched core exactly as it was. Nothing is enabled by default, so a browser or a Node session
+that never assembles a debug launch keeps the previous behaviour, and a core that does implement
+the API can still be driven by hand.
 
 ## What the test covers
 
@@ -90,6 +94,12 @@ temporary directory whose path contains spaces, and runs assembly programs throu
   read-only writes, reads past end of file, double close and `feof`/`ferror`/`fflush`;
 - append (`2`) keeps existing bytes and `w`/`1` truncates;
 - with host mode disabled no host file is touched, i.e. the VFS backend still serves the ecalls.
+
+The debugger side is covered by `node test/native/host-file-io-wiring.test.js`: a static check that
+reads `src/venusRuntime.ts` and asserts that `assemble()` enables host file mode with the program
+directory before assembling, that both core entry points are looked up defensively, and that
+`stop()` resets the backend. It needs no build and no VS Code test host.
+
 ## Remaining risks and known limits
 
 - **Unvalidated compile.** The Kotlin edits were reviewed by hand and both patches apply cleanly
@@ -97,9 +107,9 @@ temporary directory whose path contains spaces, and runs assembly programs throu
   compiled or executed. The first real compile happens in CI, so small Kotlin 1.3/Gradle 4.9
   fixes (for instance around `dynamic`/`js(...)` usage) may still be needed before the test can
   pass.
-- **The extension host must opt in.** Without the `enableHostFileIO`/`setHostFileCwd` calls the
-  native debugger keeps the old string-based path; the API only exists after patch 0002 has been
-  applied and the core rebuilt.
+- **The opt in only helps once patch 0002 has been applied and the core rebuilt.** The debugger
+  already calls `setHostFileCwd`/`enableHostFileIO` behind `typeof` guards, but a core without the
+  API ignores them and keeps the old string-based path.
 - **Descriptor semantics follow the JAR, not C stdio.** Writes append at the end of the file and
   reads advance a separate offset; the core has no `fseek`/`ftell`, so interleaving reads and
   writes on one `r+` descriptor behaves like the JAR rather than like a freshly opened C `FILE*`.

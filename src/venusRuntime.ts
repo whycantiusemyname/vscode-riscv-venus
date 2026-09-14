@@ -139,6 +139,9 @@ export class VenusRuntime extends EventEmitter {
 			// this also normalizes an uppercase drive (C:) to the drive form handled
 			// by the legacy VFS when resolving relative .import directives.
 			let posixPath = helpers.canonicalSourcePath(fpath);
+			// Project 2 programs read and write real files (ecalls 13/14/15/16) and .import files
+			// live next to the program, so point the core at that directory before assembling.
+			this.enableHostFileIO(fpath);
 			var[success, error, warnings] = simulator.driver.externalAssemble(text, posixPath, fName);
 			if (!success) {
 				VenusRenderer.getInstance().showErrorWithPopup(error);
@@ -157,6 +160,34 @@ export class VenusRuntime extends EventEmitter {
 		} catch (e: unknown) {
 			VenusRenderer.getInstance().showErrorWithPopup(e);
 			return false;
+		}
+	}
+
+	/**
+	 * Opts the Venus core into host file I/O for the session that is about to be assembled.
+	 *
+	 * The binary-safe host file bridge only exists once the patches in test/native/patches have
+	 * been applied and the core rebuilt; see test/native/HOST-BINARY-FILE-IO.md. Both entry points
+	 * are looked up defensively, so a core without them keeps its previous behaviour: ecalls
+	 * 13/14/15/16 and .import stay on the in-memory VFS.
+	 */
+	private enableHostFileIO(fpath: string) {
+		const driver: any = simulator.driver;
+		if (typeof driver.setHostFileCwd !== 'function' || typeof driver.enableHostFileIO !== 'function') {
+			return;
+		}
+		const cwd = dirname(fpath);
+		if (cwd) {
+			driver.setHostFileCwd(cwd);
+		}
+		driver.enableHostFileIO(true);
+	}
+
+	/** Restores the default VFS file backend; harmless on a core without the host file API. */
+	private disableHostFileIO() {
+		const driver: any = simulator.driver;
+		if (typeof driver.enableHostFileIO === 'function') {
+			driver.enableHostFileIO(false);
 		}
 	}
 
@@ -508,6 +539,7 @@ export class VenusRuntime extends EventEmitter {
 	 * Stop execution
 	 */
 	public stop() {
+		this.disableHostFileIO();
         simulator.driver.handleNotExitOver();
 		this.cancelRun();
 		this._pauseRequested = false;

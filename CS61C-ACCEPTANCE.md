@@ -107,3 +107,9 @@ Set `VSCODE_EXECUTABLE_PATH` to reuse an installed VS Code instead of
 downloading one, and `CS61C_PROJ2_ROOT` to add the real course project
 scenario.
 
+
+The debugger side is already wired up:
+`src/venusRuntime.ts` enables host file mode for the directory of the program being launched while
+assembling and disables it when the runtime stops, both behind `typeof` guards, so an unpatched
+core is unaffected. `node test/native/host-file-io-wiring.test.js` is the static check for that
+wiring.

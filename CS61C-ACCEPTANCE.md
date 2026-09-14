@@ -124,3 +124,14 @@ and keeps Venus' immutable-text rule (`riscv-venus.mutableText`), so an edit can
 never change code the assembler marked immutable. Step Back is offered only as
 a single-instruction undo of the backend history; Reverse Continue stays
 unadvertised and rejected.
+
+## Native exit status reporting
+
+A finished program reports its exit status through DAP: the adapter emits exactly
+one `exited` event carrying the simulator's status, and always before
+`terminated`. `ecall` 10 finishes with 0 and `ecall` 17 with the value in `a0`.
+The status is latched only when the simulator reports that the program finished
+and is cleared for every new assemble/launch, so an assembly or launch failure, a
+program that is stopped before exiting, and a relaunch can never report a stale
+code. `src/test/suite/exitSemantics.test.ts` covers the normal 0 exit, `ecall` 17,
+a program stopped before exit, a missing `.import` and a missing program file.

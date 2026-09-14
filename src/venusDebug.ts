@@ -5,7 +5,7 @@
 import {
 	Logger, logger,
 	LoggingDebugSession,
-	InitializedEvent, TerminatedEvent, StoppedEvent, BreakpointEvent, OutputEvent,
+	InitializedEvent, TerminatedEvent, ExitedEvent, StoppedEvent, BreakpointEvent, OutputEvent,
 	ProgressStartEvent, ProgressUpdateEvent, ProgressEndEvent,
 	Thread, StackFrame, Scope, Source, Handles, Breakpoint, Variable, ContinuedEvent
 } from '@vscode/debugadapter';
@@ -84,6 +84,10 @@ export class VenusDebugSession extends LoggingDebugSession {
 	private _cancelledProgressId: string | undefined = undefined;
 	private _isProgressCancellable = true;
 
+	// A session reports the exit status once. The flag is cleared for every
+	// launch so a newly assembled program cannot inherit the previous status.
+	private _exitCodeReported = false;
+
 	/**
 	 * Creates a new debug adapter that is used for one debug session.
 	 * We configure the default implementation of a debug adapter here.
@@ -145,6 +149,11 @@ export class VenusDebugSession extends LoggingDebugSession {
 			this.sendEvent(e);
 		});
 		this._runtime.on('end', () => {
+			const exitCode = this._runtime.getExitCode();
+			if (exitCode !== null && !this._exitCodeReported) {
+				this._exitCodeReported = true;
+				this.sendEvent(new ExitedEvent(exitCode));
+			}
 			this.sendEvent(new TerminatedEvent());
 		});
 	}
@@ -218,6 +227,9 @@ export class VenusDebugSession extends LoggingDebugSession {
 	}
 
 	protected async launchRequest(response: DebugProtocol.LaunchResponse, args: LaunchRequestArguments) {
+
+		// Every launch starts a new program, so it gets a fresh exit status.
+		this._exitCodeReported = false;
 
 		venusTerminal.appendText('\n');
 		venusTerminal.appendText(`-------------------------------------------------------------------------------------------\n`);

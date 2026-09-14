@@ -106,6 +106,11 @@ export class VenusRuntime extends EventEmitter {
 	private _programArguments: string[] = [];
 	private _workingDirectory: string | undefined;
 
+	// Exit status of the program under debug. It is latched when the simulator
+	// reports that the program finished, and cleared for every new assemble so
+	// a relaunch (or a failed launch) can never report the previous run's code.
+	private _exitCode: number | null = null;
+
 	constructor() {
 		super();
 		VenusRenderer.getInstance().setRuntime(this);
@@ -130,6 +135,9 @@ export class VenusRuntime extends EventEmitter {
 	}
 
 	public assemble(fpath: string, fName: string, settings: VenusSettings, programArgs: string[] = [], workingDirectory?: string): boolean {
+		// A new program starts without an exit status, even when the assembly
+		// below fails: a stale code would otherwise be reported as this run's.
+		this._exitCode = null;
 		try {
 			this.applySettings(settings);
 			// argv is initialised by the Venus core from the ArgsList DOM value,
@@ -272,6 +280,26 @@ export class VenusRuntime extends EventEmitter {
 
 	public getPRIV(): number {
 		return simulator.driver.sim.getPRIV();
+	}
+
+	/**
+	 * Exit status of the program under debug, or null while it is still running
+	 * (and for a launch that never assembled). Venus stores the status on the
+	 * simulator: `ecall` 10 finishes with 0, `ecall` 17 with the value in a0.
+	 */
+	public getExitCode(): number | null {
+		return this._exitCode;
+	}
+
+	/**
+	 * Latches the simulator's exit status. Called exactly once per finished
+	 * program, right before the `end` event, so the debug adapter can report a
+	 * single DAP `exited` event with the value the simulation produced.
+	 */
+	private latchExitCode(): void {
+		const sim = simulator.driver.sim;
+		const exitcode = sim ? sim.exitcode : null;
+		this._exitCode = typeof exitcode === 'number' ? exitcode : null;
 	}
 
 	/**
@@ -559,6 +587,7 @@ export class VenusRuntime extends EventEmitter {
 		}
 		this.updateMemory();
 		if (simulator.driver.isFinished()) {
+			this.latchExitCode();
 			this.sendEvent('end');
 		} else {
 			this.sendEvent('stopOnStep');
@@ -623,6 +652,8 @@ export class VenusRuntime extends EventEmitter {
         simulator.driver.handleNotExitOver();
 		this.cancelRun();
 		this._pauseRequested = false;
+		// A user initiated stop ends a run that has no exit status of its own.
+		this._exitCode = null;
 		this.sendEvent('end');
 	}
 
@@ -726,6 +757,7 @@ export class VenusRuntime extends EventEmitter {
 		if (paused) {
 			this.sendEvent('stopOnPause');
 		} else if (simulator.driver.sim.isDone()) {
+			this.latchExitCode();
 			this.sendEvent('end');
 		} else if (simulator.driver.sim.atBreakpoint()) {
 			this.sendEvent('stopOnBreakpoint');

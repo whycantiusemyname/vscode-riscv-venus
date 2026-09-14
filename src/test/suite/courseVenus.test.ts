@@ -91,15 +91,16 @@ suite('Venus course JAR bridge', () => {
 		assert.ok(!build().includes('--coverageFile'), 'no coverageFile means no flag');
 	});
 
-	test('emits one --def pair per define, in order, without splitting key=value', () => {
+	test('emits one --def whose value joins the entries with ; without splitting key=value', () => {
 		assert.deepStrictEqual(
 			build({ defines: ['#MALLOC_RETURN_HOOK=li a0 0', 'PRINT_ME=li a1 7'] }),
-			[
-				'-jar', JAR,
-				'--def', '#MALLOC_RETURN_HOOK=li a0 0',
-				'--def', 'PRINT_ME=li a1 7',
-				PROGRAM
-			]
+			['-jar', JAR, '--def', '#MALLOC_RETURN_HOOK=li a0 0;PRINT_ME=li a1 7', PROGRAM],
+			'the JAR takes a single --def with ;-separated entries; repeating the flag drops the first list'
+		);
+		assert.deepStrictEqual(
+			build({ defines: ['', 'ONLY=li a1 7', ''] }),
+			['-jar', JAR, '--def', 'ONLY=li a1 7', PROGRAM],
+			'empty entries are dropped instead of producing empty ; segments'
 		);
 		assert.deepStrictEqual(build({ defines: [] }), ['-jar', JAR, PROGRAM], 'no defines means no flag');
 		assert.deepStrictEqual(build({ defines: [''] }), ['-jar', JAR, PROGRAM], 'empty entries are dropped');

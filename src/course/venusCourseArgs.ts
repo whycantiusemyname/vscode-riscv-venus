@@ -17,8 +17,9 @@ import * as path from 'path';
  *   -ahs, --AllowHSAccess      Allow load/store between stack and heap (incompatible with -mc/-mcv).
  *   --coverageFile <path>      Write Venus' per-line execution counts (the map
  *                              `bash test.sh coverage` reads).
- *   --def <key=value>          Pre-define an assembler token, e.g. the Project 2
+ *   --def <k=v>[;<k=v>...]     Pre-define assembler tokens, e.g. the Project 2
  *                              `#MALLOC_RETURN_HOOK=li a0 0` fail-injection hooks.
+ *                              One `--def` carries the `;`-separated list.
  *
  * Positional arguments are `file` followed by `simulatorArgs`, i.e. the
  * arguments handed to the simulated program. Venus takes everything after the
@@ -50,9 +51,11 @@ export interface VenusCourseInvocation extends VenusCourseFlags {
 	/** Emit `--coverageFile <path>`, the execution-count map Project 2 reads. */
 	coverageFile?: string;
 	/**
-	 * Emit one `--def <entry>` per entry, in order. Each entry is the JAR's
-	 * `key=value` text, for example `#MALLOC_RETURN_HOOK=li a0 0` as the
-	 * Project 2 framework builds it.
+	 * Emit a single `--def` whose value is the entries joined with `;`, the list
+	 * form the JAR documents. Each entry is the JAR's `key=value` text, for
+	 * example `#MALLOC_RETURN_HOOK=li a0 0` as the Project 2 framework builds
+	 * it. Repeating `--def` is not safe: the JAR registers it with a value
+	 * action that assigns, so a second flag would drop the first list.
 	 */
 	defines?: string[];
 }
@@ -200,10 +203,13 @@ export function buildVenusJarArgv(
 		javaArgs.push('--coverageFile', invocation.coverageFile);
 	}
 
-	// One --def per entry, exactly as framework.py builds them: `--def` followed
-	// by the raw `key=value` text (the key may be a `#`-prefixed token).
-	for (const define of invocation.defines || []) {
-		if (define.length > 0) { javaArgs.push('--def', define); }
+	// One `--def` with `;`-separated entries: the form the JAR documents ("a list
+	// of define values ... separated by ;") and the shape framework.py passes.
+	// Emitting the flag once per entry would let the JAR's assigning value action
+	// overwrite the earlier list, silently dropping defines.
+	const defines = (invocation.defines || []).filter(define => define.length > 0);
+	if (defines.length > 0) {
+		javaArgs.push('--def', defines.join(';'));
 	}
 
 	if (invocation.workingDirectory && invocation.passWorkingDirectoryFlag) {

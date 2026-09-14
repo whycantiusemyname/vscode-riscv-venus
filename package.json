@@ -198,7 +198,7 @@
 						"type": "string"
 					},
 					"default": [],
-					"description": "Assembler defines passed as one --def per entry, in the JAR's key=value form, for example #MALLOC_RETURN_HOOK=li a0 0 as built by the Project 2 framework."
+					"description": "Assembler defines passed in one --def, in the JAR's key=value form. Several entries are joined with `;`, the list form the JAR documents (for example #MALLOC_RETURN_HOOK=li a0 0;#FREAD_RETURN_HOOK=li a0 -1 as built by the Project 2 framework)."
 				}
 			}
 		},

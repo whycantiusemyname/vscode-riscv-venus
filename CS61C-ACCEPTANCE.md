@@ -51,9 +51,11 @@ claim to replace `venus.jar -cc`, `venus.jar -mc`, or the Project 2 test suite.
 The two remaining Project 2 flags are forwarded as settings so the bridge can
 reproduce the course harness: `riscv-venus.course.coverageFile` emits
 `--coverageFile` (the map `bash test.sh coverage` reads, resolved against the
-run's working directory) and `riscv-venus.course.defines` emits one `--def
-<key=value>` per entry (the fail-injection hooks such as
-`#MALLOC_RETURN_HOOK=li a0 0`).
+run's working directory) and `riscv-venus.course.defines` emits a single `--def`
+whose value joins the entries with `;`, the list form the JAR documents (the
+fail-injection hooks such as `#MALLOC_RETURN_HOOK=li a0 0`). Repeating `--def`
+is avoided because the JAR registers an assigning value action for it, which
+would silently drop the earlier list.
 ## Differential acceptance against the pinned course JAR
 
 `scripts/ci/venus-course-parity.js` (fixtures under
@@ -65,9 +67,9 @@ code behind the four `riscv-venus.course.*` commands - against the pinned
 the exit code, the combined output, and the host files that were written:
 
 - run, `-cc`, `-mc`, `-mcv`, `-ms -1` / `-ms 1000` / `-ms 5`, `-it` on and off;
-- `--def` define substitution (`defs_hook.s` prints 7 with the define and 3
-  without it) and the coverage map `--coverageFile` writes, which must be
-  identical for the direct JAR run and the bridged run;
+- `--def` define substitution (`defs_hook.s` prints 7/5 without defines and 7/9
+  with both hooks injected) and the coverage map `--coverageFile` writes, which
+  must be identical for the direct JAR run and the bridged run;
 - argv entries containing spaces and flag-shaped arguments;
 - program paths and working directories containing spaces, including `-wd`, and
   a relative `workingDirectory` resolved against the project root;

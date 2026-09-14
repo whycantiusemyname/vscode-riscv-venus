@@ -453,6 +453,21 @@ function buildCases(sandbox, jarPath) {
 		expect: { exitCode: 0, stdoutContains: ['3'] }
 	});
 
+	add('--def: several defines are joined into one ;-separated list', {
+		program: fixture('defs_hook.s'),
+		programDir: 'spaced',
+		programArg: 'absolute',
+		cwd: 'spaced',
+		directFlags: ['--def', '#PRINT_HOOK=li a1 7;#PRINT_HOOK2=li a1 9'],
+		invocation: { defines: ['#PRINT_HOOK=li a1 7', '#PRINT_HOOK2=li a1 9'] },
+		expect: {
+			// Both hooks have to reach the assembler: the JAR assigns a repeated
+			// --def, so a per-entry emission would print 7 and 5, not 7 and 9.
+			exitCode: 0,
+			stdoutContains: ['7', '9']
+		}
+	});
+
 	// -- host file I/O -----------------------------------------------------
 	add('file io: relative paths land in the working directory', {
 		program: fixture('file_io.s'),

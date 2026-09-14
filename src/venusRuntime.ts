@@ -79,6 +79,11 @@ export class VenusRuntime extends EventEmitter {
 	// reliable way to unwind it (rather than trying to infer a call from the
 	// instruction at the new PC).
 	private _stackHistory = new Array<CallStackItem[]>();
+	// Snapshots are small, but an unbounded run must not grow the history without
+	// limit.  Dropping the *oldest* snapshots keeps step back correct: Prev always
+	// rewinds the newest step first, and once the retained window is exhausted the
+	// request is refused instead of restoring an unrelated call stack.
+	private static readonly _maxStackHistory = 20000;
 
 	// maps from sourceFile to array of Mock breakpoints
 	private _breakPoints = new Map<string, VenusBreakpoint[]>();
@@ -535,20 +540,20 @@ export class VenusRuntime extends EventEmitter {
 
 	/**
 	 * Step to the next/previous non empty line. Also steps into functions
+	 * @returns false when a reverse step was requested but cannot be honoured
 	 */
-	public step(reverse = false) {
+	public step(reverse = false): boolean {
 		// A step request can arrive while a run loop is still scheduled. Stop
 		// that loop silently first so exactly one instruction is executed.
 		this.cancelRun();
 		this._pauseRequested = false;
 		if (reverse) {
-			// undo() is intentionally a no-op when the simulator history is empty.
-			// Keep our own history in lockstep and avoid restoring a stale stack.
-			if (this._stackHistory.length > 0) {
-				simulator.driver.undo();
-				this._functionStack = this._stackHistory.pop()!;
-				this.reindexStack();
+			if (!this.canStepBack()) {
+				return false;
 			}
+			simulator.driver.undo();
+			this._functionStack = this._stackHistory.pop()!;
+			this.reindexStack();
 		} else {
 			this.executeStep();
 		}
@@ -558,6 +563,18 @@ export class VenusRuntime extends EventEmitter {
 		} else {
 			this.sendEvent('stopOnStep');
 		}
+		return true;
+	}
+
+	/**
+	 * True when the previously executed instruction can be undone.  Both histories
+	 * have to agree: without a snapshot for that instruction the source level call
+	 * stack cannot be unwound, and without an entry in the simulator's own undo
+	 * history (empty, trimmed, or disabled through the Venus history limit) there is
+	 * no register/memory state to restore.
+	 */
+	public canStepBack(): boolean {
+		return this._stackHistory.length > 0 && simulator.driver.sim.canUndo();
 	}
 
 	/**
@@ -725,8 +742,16 @@ export class VenusRuntime extends EventEmitter {
 	private executeStep() {
 		const previousStack = this._functionStack.map(frame => ({ ...frame }));
 		simulator.driver.sim.step();
-		this._stackHistory.push(previousStack);
+		this.recordStackHistory(previousStack);
 		this.updateStack();
+	}
+
+	/** Keeps the call stack snapshots in lockstep with the simulator undo history. */
+	private recordStackHistory(snapshot: CallStackItem[]) {
+		this._stackHistory.push(snapshot);
+		while (this._stackHistory.length > VenusRuntime._maxStackHistory) {
+			this._stackHistory.shift();
+		}
 	}
 
 	private updateStack() {

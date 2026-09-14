@@ -568,13 +568,17 @@ export class VenusDebugSession extends LoggingDebugSession {
 	}
 
 	/*
-		Not yet supported
-		see: https://gitlab.lrz.de/riscv/debugger/-/issues/9 Note: old issue
-		Supported by the backend but need to make sure that frotend and venusRuntime are compatible.
-		Also unclear if we actually need this feature.
+		Called when clicking Prev: the simulator undoes the last executed instruction
+		(PC, registers and memory) and venusRuntime restores the source level call stack
+		snapshot taken before that instruction. Reverse continue stays unsupported.
 	*/
 	protected stepBackRequest(response: DebugProtocol.StepBackResponse, args: DebugProtocol.StepBackArguments): void {
-		this._runtime.step(true);
+		if (!this._runtime.step(true)) {
+			// Report the miss instead of silently doing nothing: a client that asked
+			// to go back must not be told that it moved.
+			response.success = false;
+			response.message = 'Step back is not available: the simulator has no recorded instruction to undo.';
+		}
 		this.sendResponse(response);
 	}
 

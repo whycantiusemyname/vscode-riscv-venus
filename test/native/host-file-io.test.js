@@ -194,23 +194,27 @@ function loadVenus(buildDirectory) {
         if (request === 'kotlin') { return kotlin; }
         return load.apply(this, arguments);
     };
-    // The browser Driver schedules a delayed UI/local-storage initialization from its singleton
-    // constructor. This acceptance harness needs only the simulator + host-file API, and letting
-    // that UI timer run later would require unrelated globals and leave a save interval alive.
-    // Suppress only timers created while the core module is being initialized, then immediately
-    // restore Node's real timer implementation for the actual tests.
-    const setTimeoutReal = global.setTimeout;
-    global.setTimeout = function () { return undefined; };
     try {
         return require(coreFile);
     } finally {
-        global.setTimeout = setTimeoutReal;
         Module._load = load;
     }
 }
 
 const venus = loadVenus(buildDir);
-const driver = venus.venus.Driver;
+// Kotlin `object Driver` is lazy: requiring venus.js defines the getter, but the singleton is not
+// constructed until this property is read. Its constructor schedules browser UI/local-storage
+// initialization that is unrelated to this native host-I/O harness and would leave asynchronous
+// work running after the assertions. Suppress exactly that constructor-time timeout, then restore
+// Node's timer before the actual simulator tests execute.
+const setTimeoutReal = global.setTimeout;
+global.setTimeout = function () { return undefined; };
+let driver;
+try {
+    driver = venus.venus.Driver;
+} finally {
+    global.setTimeout = setTimeoutReal;
+}
 const Renderer = venus.venus.Renderer;
 
 if (typeof driver.enableHostFileIO !== 'function') {

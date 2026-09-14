@@ -57,3 +57,17 @@ Run it with `npm run compile && npm run test:course-parity`; set
 `VENUS_COURSE_JAR` when the JAR is not in the CS61C directory layout. Without a
 JAR the harness exits 0 with a SKIPPED line, so CI sets `VENUS_COURSE_REQUIRE=1`
 whenever the JAR is present to keep the check from passing silently.
+
+## Native host binary file I/O (Project 2)
+
+Project 2 programs read and write real files through ecalls 13/14/15/16. The bundled Venus core
+still moves file contents through `String`/`StringBuilder` values, which does not preserve bytes
+0x00 and 0x80-0xff. The binary-safe host file bridge is prepared as patches under
+`test/native/patches/` and is **not** applied to the pinned submodule, because the two
+repositories it changes (`hm-riscv/venus` at `70472ec0`, `hm-riscv/venusbackend` at `aa96da2`) are
+upstream and this repository cannot push to them; pointing the submodule at a local commit would
+break every fresh clone. `test/native/HOST-BINARY-FILE-IO.md` is the full note; the expected CI
+contract is: check out submodules recursively, run
+`pwsh test/native/apply-host-file-io-patches.ps1`, rebuild with `npm run compileAll`, and run
+`VENUS_REQUIRE_HOST_FILE_IO=1 node test/native/host-file-io.test.js`. Until that happens, the
+native debugger keeps its previous (non binary-safe) file I/O behaviour.

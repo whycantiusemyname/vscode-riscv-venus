@@ -1,0 +1,558 @@
+diff --git a/riscv/insts/integer/base/i/ecall/ecall.kt b/riscv/insts/integer/base/i/ecall/ecall.kt
+index 491bcf9..5ed2138 100644
+--- a/riscv/insts/integer/base/i/ecall/ecall.kt
++++ b/riscv/insts/integer/base/i/ecall/ecall.kt
+@@ -273,8 +273,8 @@ private fun readFile(sim: Simulator) {
+     val data = sim.filesHandler.readFileDescriptor(fdID, size)
+     var offset = 0
+     if (data != null) {
+-        for (c in data) {
+-            sim.storeBytewCache(bufferAddress + offset, c.toInt())
++        for (b in data) {
++            sim.storeBytewCache(bufferAddress + offset, b.toInt() and 0xFF)
+             offset++
+         }
+         sim.setReg(Registers.a0, offset)
+@@ -296,17 +296,13 @@ private fun writeFile(sim: Simulator) {
+         sim.setReg(Registers.a0, FilesHandler.EOF)
+         return
+     }
++    val data = ByteArray(size)
+     var offset = 0
+-    val sb = StringBuilder()
+     while (offset < size) {
+-        var addr = bufferAddress + offset
+-        var byte = sim.loadByte(addr).toShort()
+-        var char = byte.toChar()
+-        sb.append(char)
++        data[offset] = (sim.loadByte(bufferAddress + offset) and 0xFF).toByte()
+         offset++
+     }
+-    val s = sb.toString()
+-    var result = sim.filesHandler.writeFileDescriptor(fdID, s)
++    var result = sim.filesHandler.writeFileDescriptor(fdID, data)
+     if (result != FilesHandler.EOF) {
+         result /= sizeOfItem
+     }
+diff --git a/simulator/FileDescriptor.kt b/simulator/FileDescriptor.kt
+index f482011..c227ed8 100644
+--- a/simulator/FileDescriptor.kt
++++ b/simulator/FileDescriptor.kt
+@@ -2,50 +2,61 @@ package venusbackend.simulator
+ 
+ import venus.vfs.VFSFile
+ 
+-class FileDescriptor(var vfsFile: VFSFile, var fileMetaData: FileMetaData) {
++/**
++ * A file handle backed by the in-memory VFS, used while host file mode is disabled.
++ *
++ * Contents are kept as chars in [dataStream], one char per byte (`byte and 0xff`), exactly like
++ * the JVM reference implementation. Reading turns a char back into its byte and writing turns a
++ * byte into the matching char, so binary data such as the Project 2 matrices is not mangled by a
++ * UTF-8 round trip.
++ */
++class FileDescriptor(var vfsFile: VFSFile, var fileMetaData: FileMetaData) : FileHandle {
+     var feof = false
+     var ferror = false
+     val dataStream: StringBuilder = StringBuilder(vfsFile.readText())
+ 
+-    fun read(size: Int): String? {
++    override fun read(size: Int): ByteArray? {
+         val amtToRead = minOf(size, dataStream.length - fileMetaData.readOffset)
+         if (amtToRead == 0 || !fileMetaData.readable) {
+             return null
+         }
+         val oldoffset = fileMetaData.readOffset
+         fileMetaData.readOffset += amtToRead
+-        return dataStream.subSequence(oldoffset, fileMetaData.readOffset).toString()
++        val data = dataStream.subSequence(oldoffset, fileMetaData.readOffset)
++        val bytes = ByteArray(data.length)
++        for (i in 0 until data.length) {
++            bytes[i] = (data[i].toInt() and 0xFF).toByte()
++        }
++        return bytes
+     }
+ 
+-    fun write(value: String): Int? {
++    override fun write(data: ByteArray): Int {
+         if (!fileMetaData.writeable) {
+-            return null
++            return FilesHandler.EOF
+         }
+-        dataStream.append(value)
+-        return value.length
++        for (b in data) {
++            dataStream.append((b.toInt() and 0xFF).toChar())
++        }
++        return data.size
+     }
+ 
+-    fun flush(): Int {
++    override fun flush(): Int {
+         if (fileMetaData.writeable) {
+             vfsFile.setText(this.dataStream.toString())
+         }
+         return 0
+     }
+ 
+-    fun isEOF(): Int {
+-        return if (feof) {
+-            1
+-        } else {
+-            0
+-        }
++    override fun close(): Int {
++        return flush()
+     }
+ 
+-    fun getError(): Int {
+-        return if (ferror) {
+-            1
+-        } else {
+-            0
+-        }
++    override fun isEOF(): Int {
++        return if (feof) 1 else 0
++    }
++
++    override fun getError(): Int {
++        return if (ferror) 1 else 0
+     }
+ }
+ 
+@@ -53,4 +64,4 @@ class FileMetaData(
+     var readOffset: Int = 0,
+     var readable: Boolean = false,
+     var writeable: Boolean = false
+-)
+\ No newline at end of file
++)
+diff --git a/simulator/FileHandle.kt b/simulator/FileHandle.kt
+new file mode 100644
+index 0000000..db2d61c
+--- /dev/null
++++ b/simulator/FileHandle.kt
+@@ -0,0 +1,85 @@
++package venusbackend.simulator
++
++/**
++ * A byte oriented file handle.
++ *
++ * Both the VFS backed [FileDescriptor] and the host backed [HostFileDescriptor] implement this, so
++ * that ecalls 14/15 (`read`/`write`) move raw bytes instead of strings. Bytes in the range
++ * 0x00..0xff survive that trip unchanged.
++ */
++interface FileHandle {
++    /** Reads at most [size] bytes. `null` means nothing could be read (end of file, or denied). */
++    fun read(size: Int): ByteArray?
++
++    /** Appends [data]. Returns the number of bytes written, or [FilesHandler.EOF] on failure. */
++    fun write(data: ByteArray): Int
++
++    /** Flushes pending writes. Returns 0 on success, [FilesHandler.EOF] otherwise. */
++    fun flush(): Int
++
++    /** Closes the handle. Returns 0 on success, [FilesHandler.EOF] otherwise. */
++    fun close(): Int
++
++    /** Non-zero when the end of the stream has been reached, like C's `feof`. */
++    fun isEOF(): Int
++
++    /** Non-zero when an error occurred on the handle, like C's `ferror`. */
++    fun getError(): Int
++}
++
++/**
++ * A file handle for a real (host) file, used while host file mode is enabled.
++ *
++ * Reads come straight from the file through [HostFileSystem.readAt]; writes append and are not
++ * buffered. Appending matches the JVM reference implementation, whose descriptor keeps the whole
++ * file in a string builder and appends every write. No UTF-8 encoding is involved at any point.
++ *
++ * `feof`/`ferror` return 0, again like the JVM reference, whose flags are never raised: programs
++ * detect the end of a file from the [FilesHandler.EOF] result of `read`.
++ */
++class HostFileDescriptor(val path: String, private val fdID: Int, val permissions: Int) : FileHandle {
++    private val readable = permissions == 0 || permissions == 3 || permissions == 4 || permissions == 5
++    private val writeable = permissions == 1 || permissions == 2 || permissions == 3 ||
++            permissions == 4 || permissions == 5
++    private var readOffset = 0
++
++    override fun read(size: Int): ByteArray? {
++        if (!readable || size <= 0) {
++            return null
++        }
++        val data = HostFileSystem.readAt(fdID, size, readOffset)
++        if (data == null || data.isEmpty()) {
++            return null
++        }
++        readOffset += data.size
++        return data
++    }
++
++    override fun write(data: ByteArray): Int {
++        if (!writeable) {
++            return FilesHandler.EOF
++        }
++        val position = HostFileSystem.fileSize(fdID)
++        if (position < 0) {
++            return FilesHandler.EOF
++        }
++        return HostFileSystem.writeAt(fdID, data, position)
++    }
++
++    override fun flush(): Int {
++        // Host writes are not buffered, so there is nothing to push out here.
++        return 0
++    }
++
++    override fun close(): Int {
++        return if (HostFileSystem.closeFile(fdID)) 0 else FilesHandler.EOF
++    }
++
++    override fun isEOF(): Int {
++        return 0
++    }
++
++    override fun getError(): Int {
++        return 0
++    }
++}
+diff --git a/simulator/FilesHandler.kt b/simulator/FilesHandler.kt
+index 2121674..ddd70c5 100644
+--- a/simulator/FilesHandler.kt
++++ b/simulator/FilesHandler.kt
+@@ -2,15 +2,19 @@ package venusbackend.simulator
+ 
+ import venus.vfs.VFSFile
+ import venus.vfs.VFSType
++
+ // Fixme make the fileshandler handle numbers and not Ints!
+ class FilesHandler(sim: Simulator) {
+     companion object {
+         var EOF = -1
+     }
+-    val files = HashMap<Int, FileDescriptor>()
++    val files = HashMap<Int, FileHandle>()
+     var fdCounter = 3
+ 
+     fun openFile(sim: Simulator, filename: String, permissions: Int): Int {
++        if (HostFileSystem.isEnabled()) {
++            return openHostFile(filename, permissions)
++        }
+         // open file in VFS here
+         val o = sim.VFS.getObjectFromPath(filename)
+         /*
+@@ -70,7 +74,31 @@ class FilesHandler(sim: Simulator) {
+         return fdCounter++
+     }
+ 
+-    fun getFileDescriptor(fdID: Int): FileDescriptor? {
++    /**
++     * Opens [filename] on the host filesystem: relative paths are resolved against the working
++     * directory configured through `venus.Driver.setHostFileCwd`. The permission bits mean the
++     * same as in the VFS path above, and get mapped onto the matching Node flags.
++     */
++    private fun openHostFile(filename: String, permissions: Int): Int {
++        val flags = when (permissions) {
++            0 -> "r"
++            1 -> "w"
++            2 -> "a"
++            3 -> "r+"
++            4 -> "w+"
++            5 -> "a+"
++            else -> return EOF
++        }
++        val path = HostFileSystem.resolve(filename)
++        val hostFD = HostFileSystem.openFile(path, flags)
++        if (hostFD == EOF) {
++            return EOF
++        }
++        files[fdCounter] = HostFileDescriptor(path, hostFD, permissions)
++        return fdCounter++
++    }
++
++    fun getFileDescriptor(fdID: Int): FileHandle? {
+         if (files.containsKey(fdID)) {
+             return files[fdID]
+         }
+@@ -79,7 +107,7 @@ class FilesHandler(sim: Simulator) {
+ 
+     fun closeFileDescriptor(fdID: Int): Int {
+         val fd = files.remove(fdID)
+-        return fd?.flush() ?: EOF
++        return fd?.close() ?: EOF
+     }
+ 
+     fun flushFileDescriptor(fdID: Int): Int {
+@@ -87,7 +115,7 @@ class FilesHandler(sim: Simulator) {
+         return fd?.flush() ?: EOF
+     }
+ 
+-    fun readFileDescriptor(fdID: Int, size: Int): String? {
++    fun readFileDescriptor(fdID: Int, size: Int): ByteArray? {
+         if (size < 0) {
+             return null
+         }
+@@ -95,9 +123,9 @@ class FilesHandler(sim: Simulator) {
+         return fd?.read(size)
+     }
+ 
+-    fun writeFileDescriptor(fdID: Int, value: String): Int {
++    fun writeFileDescriptor(fdID: Int, data: ByteArray): Int {
+         val fd = getFileDescriptor(fdID)
+-        return fd?.write(value) ?: EOF
++        return fd?.write(data) ?: EOF
+     }
+ 
+     fun getFileDescriptorEOF(fdID: Int): Int {
+@@ -109,4 +137,4 @@ class FilesHandler(sim: Simulator) {
+         val fd = getFileDescriptor(fdID)
+         return fd?.getError() ?: EOF
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/simulator/HostFileSystem.kt b/simulator/HostFileSystem.kt
+new file mode 100644
+index 0000000..ca9f78c
+--- /dev/null
++++ b/simulator/HostFileSystem.kt
+@@ -0,0 +1,237 @@
++package venusbackend.simulator
++
++/**
++ * Host filesystem bridge for the native (Node.js) Venus backend.
++ *
++ * The Venus core is built for two very different hosts:
++ *
++ *  * the browser, where the file system is the in-memory `venus.vfs.VirtualFileSystem` and the
++ *    only persistence is `localStorage`;
++ *  * Node.js (the native VS Code debugger), where the programs under test read and write real
++ *    files such as the Project 2 input matrices.
++ *
++ * All Node `fs` usage lives here, so that the browser build never loads it: the module is
++ * required lazily and only host mode has been enabled explicitly through [enable]. Host mode is
++ * off by default, which keeps the legacy VFS/browser code path unchanged.
++ *
++ * Contents are handled as bytes: bytes in the range 0x00..0xff are passed through verbatim
++ * instead of being routed through a UTF-8 encode/decode round trip. This mirrors the JVM
++ * reference implementation, which maps a `java.io.File` onto a VFS file byte by byte.
++ *
++ * The embedding application configures this through the `venus.Driver` JS API:
++ *
++ * ```
++ * venus.Driver.setHostFileCwd(process.cwd())
++ * venus.Driver.enableHostFileIO(true)
++ * ```
++ */
++object HostFileSystem {
++    /** Directory used to resolve relative paths. Empty means "ask the process". */
++    var workingDirectory: String = ""
++        private set
++
++    private var hostEnabled = false
++    private var fsProbed = false
++    private var nodeFs: dynamic = null
++
++    /** Turns the host file backend on or off. Off by default, so browser backends keep the VFS. */
++    fun enable(enabled: Boolean) {
++        hostEnabled = enabled
++    }
++
++    /** True when the embedding asked for host files and a Node `fs` module is available. */
++    fun isEnabled(): Boolean {
++        return hostEnabled && fs() != null
++    }
++
++    /** Sets the directory that relative paths are resolved against. */
++    fun setWorkingDirectory(path: String) {
++        workingDirectory = path.replace('\\', '/').trimEnd('/')
++    }
++
++    /**
++     * Resolves [path] to a host path: absolute paths (POSIX, Windows drive and UNC) are used as
++     * given, everything else is resolved against the configured working directory.
++     */
++    fun resolve(path: String): String {
++        val cleaned = path.replace('\\', '/')
++        if (isAbsolute(cleaned)) {
++            return cleaned
++        }
++        val base = baseDirectory()
++        return if (base.isEmpty()) cleaned else base + "/" + cleaned
++    }
++
++    /**
++     * Resolves [path] to an existing host file, or `null` when there is none.
++     *
++     * VFS paths of files that live directly under the root, such as `/main.s`, are also tried
++     * relative to the working directory, because the VFS tree prefixes them with a separator.
++     */
++    fun resolveExisting(path: String): String? {
++        val cleaned = path.replace('\\', '/')
++        val direct = resolve(cleaned)
++        if (isFile(direct)) {
++            return direct
++        }
++        val withoutRoot = cleaned.trimStart('/')
++        if (withoutRoot != cleaned) {
++            val relative = resolve(withoutRoot)
++            if (relative != direct && isFile(relative)) {
++                return relative
++            }
++        }
++        return null
++    }
++
++    /** True when [path] names an existing regular file. */
++    fun isFile(path: String): Boolean {
++        val fs = fs() ?: return false
++        return try {
++            fs.statSync(path).isFile() as Boolean
++        } catch (e: dynamic) {
++            false
++        }
++    }
++
++    /** Reads the whole file. Returns `null` when it cannot be read. */
++    fun readBytes(path: String): ByteArray? {
++        val fs = fs() ?: return null
++        return try {
++            val fd = fs.openSync(path, "r") as Int
++            try {
++                readFully(fd, fileSize(fd), 0)
++            } finally {
++                fs.closeSync(fd)
++            }
++        } catch (e: dynamic) {
++            null
++        }
++    }
++
++    /**
++     * Reads the whole file as text with a 1:1 byte/char mapping (latin-1). This mirrors the JVM
++     * reference implementation, which reads the bytes of a `java.io.File` into a string of chars
++     * `byte and 0xff`: no UTF-8 decoding happens, so no byte is lost or replaced.
++     */
++    fun readText(path: String): String? {
++        val bytes = readBytes(path) ?: return null
++        val sb = StringBuilder(bytes.size)
++        for (b in bytes) {
++            sb.append((b.toInt() and 0xFF).toChar())
++        }
++        return sb.toString()
++    }
++
++    /** Opens a host file with a Node flag string (`r`, `w`, `a`, `r+`, `w+`, `a+`). */
++    fun openFile(path: String, flags: String): Int {
++        val fs = fs() ?: return FilesHandler.EOF
++        return try {
++            fs.openSync(path, flags) as Int
++        } catch (e: dynamic) {
++            FilesHandler.EOF
++        }
++    }
++
++    /** Closes a host file descriptor. */
++    fun closeFile(fd: Int): Boolean {
++        val fs = fs() ?: return false
++        return try {
++            fs.closeSync(fd)
++            true
++        } catch (e: dynamic) {
++            false
++        }
++    }
++
++    /** Size of an open file in bytes, or -1 when it cannot be determined. */
++    fun fileSize(fd: Int): Int {
++        val fs = fs() ?: return -1
++        return try {
++            (fs.fstatSync(fd).size as Number).toInt()
++        } catch (e: dynamic) {
++            -1
++        }
++    }
++
++    /**
++     * Reads up to [size] bytes starting at [position]. Returns the bytes that were read (fewer
++     * than [size] at end of file), or `null` when the read failed.
++     */
++    fun readAt(fd: Int, size: Int, position: Int): ByteArray? {
++        if (size < 0) {
++            return null
++        }
++        return readFully(fd, size, position)
++    }
++
++    /** Writes [data] at [position]. Returns the number of bytes written, or [FilesHandler.EOF]. */
++    fun writeAt(fd: Int, data: ByteArray, position: Int): Int {
++        val fs = fs() ?: return FilesHandler.EOF
++        return try {
++            fs.writeSync(fd, data, 0, data.size, position) as Int
++        } catch (e: dynamic) {
++            FilesHandler.EOF
++        }
++    }
++
++    private fun readFully(fd: Int, size: Int, position: Int): ByteArray? {
++        if (size <= 0) {
++            return ByteArray(0)
++        }
++        val buffer = ByteArray(size)
++        var offset = 0
++        while (offset < size) {
++            val read = readInto(fd, buffer, offset, size - offset, position + offset) ?: return null
++            if (read <= 0) {
++                break
++            }
++            offset += read
++        }
++        return if (offset == size) buffer else buffer.copyOf(offset)
++    }
++
++    private fun readInto(fd: Int, buffer: ByteArray, offset: Int, length: Int, position: Int): Int? {
++        val fs = fs() ?: return null
++        return try {
++            fs.readSync(fd, buffer, offset, length, position) as Int
++        } catch (e: dynamic) {
++            null
++        }
++    }
++
++    private fun isAbsolute(path: String): Boolean {
++        return path.startsWith("/") || path.matches(Regex("[A-Za-z]:.*"))
++    }
++
++    private fun baseDirectory(): String {
++        if (workingDirectory.isNotEmpty()) {
++            return workingDirectory
++        }
++        return processCwd()
++    }
++
++    private fun processCwd(): String {
++        return try {
++            js("(typeof process === 'object' && process.cwd) ? process.cwd().replace(/\\\\/g, '/') : ''") as String
++        } catch (e: dynamic) {
++            ""
++        }
++    }
++
++    /**
++     * Lazily requires Node's `fs`. Nothing is loaded at module scope, so browser builds stay
++     * unchanged: they simply never enable host mode.
++     */
++    private fun fs(): dynamic {
++        if (!fsProbed) {
++            fsProbed = true
++            nodeFs = try {
++                js("(typeof require === 'function') ? require('fs') : null")
++            } catch (e: dynamic) {
++                null
++            }
++        }
++        return nodeFs
++    }
++}

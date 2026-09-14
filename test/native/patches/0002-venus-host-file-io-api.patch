@@ -1,0 +1,67 @@
+diff --git a/src/main/kotlin/venus/Driver.kt b/src/main/kotlin/venus/Driver.kt
+index 89fbefa3..c60a1deb 100644
+--- a/src/main/kotlin/venus/Driver.kt
++++ b/src/main/kotlin/venus/Driver.kt
+@@ -532,6 +532,29 @@ external val document: Document
+         }
+     }
+ 
++    /**
++     * Enables the host file backend. While enabled, ecalls 13/14/15/16 read and write real
++     * files (within the configured working directory) instead of files in the in-memory VFS,
++     * and `.import` resolves through the real filesystem. Off by default, so browser backends
++     * keep using the VFS alone.
++     */
++    @JsName("enableHostFileIO") fun enableHostFileIO(enabled: Boolean) {
++        HostFileSystem.enable(enabled)
++    }
++
++    /**
++     * Sets the directory that relative host file paths are resolved against, typically the
++     * workspace or launch directory of the debug session.
++     */
++    @JsName("setHostFileCwd") fun setHostFileCwd(cwd: String) {
++        HostFileSystem.setWorkingDirectory(cwd)
++    }
++
++    /** True while host file mode is enabled and Node's fs module is available. */
++    @JsName("isHostFileIOEnabled") fun isHostFileIOEnabled(): Boolean {
++        return HostFileSystem.isEnabled()
++    }
++
+     @JsName("externalAssemble") fun externalAssemble(text: String, absPath: String = "", fileName: String = "main.s"): Any {
+         var success = true
+         var errs = ""
+diff --git a/src/main/kotlin/venus/vfs/VirtualFileSystem.kt b/src/main/kotlin/venus/vfs/VirtualFileSystem.kt
+index f6fb0208..2a9d34ef 100644
+--- a/src/main/kotlin/venus/vfs/VirtualFileSystem.kt
++++ b/src/main/kotlin/venus/vfs/VirtualFileSystem.kt
+@@ -2,6 +2,7 @@ package venus.vfs
+ 
+ import venus.Driver
+ import venusbackend.simulator.SimulatorSettings
++import venusbackend.simulator.HostFileSystem
+ import kotlin.browser.window
+ 
+ @JsModule("fs")
+@@ -293,6 +294,20 @@ external object fs {
+             }
+         }
+         val f = VFSFile(fname, curloc)
++        // Native (Node) backend: while host file mode is enabled, resolve the path on the real
++        // filesystem first (relative paths against the configured working directory), the same way
++        // the JVM reference implementation does through java.io.File. Browser backends and the
++        // legacy VFS path below are untouched, because the host bridge is only consulted while
++        // host mode has been enabled explicitly.
++        if (HostFileSystem.isEnabled()) {
++            val hostPath = HostFileSystem.resolveExisting(f.getPath())
++            val text = if (hostPath == null) null else HostFileSystem.readText(hostPath)
++            if (text != null) {
++                f.setText(text)
++                curloc.addChild(f)
++                return f
++            }
++        }
+         var fpath = f.getPath()
+         f.setText(fs.readFileSync(fpath, "utf-8"))
+         curloc.addChild(f)

@@ -318,7 +318,7 @@ new file mode 100644
 index 0000000..ca9f78c
 --- /dev/null
 +++ b/simulator/HostFileSystem.kt
-@@ -0,0 +1,237 @@
+@@ -0,0 +1,247 @@
 +package venusbackend.simulator
 +
 +/**
@@ -448,7 +448,17 @@ index 0000000..ca9f78c
 +    fun openFile(path: String, flags: String): Int {
 +        val fsModule = fs() ?: return FilesHandler.EOF
 +        return try {
-+            fsModule.openSync(path, flags) as Int
++            val fd = fsModule.openSync(path, flags) as Int
++            // POSIX lets a directory be opened read-only, but the JVM reference implementation
++            // only ever maps a regular file onto a descriptor, so anything else counts as a
++            // failed open on every platform. The probe is closed again so the descriptor table
++            // stays clean either way.
++            if (fsModule.fstatSync(fd).isFile() as Boolean) {
++                fd
++            } else {
++                fsModule.closeSync(fd)
++                FilesHandler.EOF
++            }
 +        } catch (e: dynamic) {
 +            FilesHandler.EOF
 +        }

@@ -33,7 +33,10 @@ the in-memory VFS.
 - adds `simulator/HostFileSystem.kt`, the only place that touches Node's `fs`. The module is
   required lazily through `js(...)`, so browser builds never load it and host mode stays off
   unless the embedding enables it. It resolves absolute paths (POSIX, Windows drive, UNC) and
-  resolves everything else against the configured working directory;
+  resolves everything else against the configured working directory, and refuses anything that
+  is not a regular file, so opening a directory is EOF on every platform exactly like the JAR,
+  whose `VirtualFileSystem` only ever maps `VFSType.File` objects (POSIX lets `open` succeed on
+  a directory, so the platform check has to be explicit);
 - makes `simulator/FileDescriptor.kt` (the VFS descriptor) implement `FileHandle` and move bytes
   instead of strings, keeping one char per byte (`byte and 0xff`) exactly like the JAR;
 - switches `simulator/FilesHandler.kt` to `FileHandle` and opens files on the host while host mode
@@ -149,3 +152,10 @@ declaration.
 - **The VFS backend still stores one char per byte in a `StringBuilder`.** That is the JAR's own
   representation and is binary-safe for the ecalls, but it gives the browser backend no real file
   I/O, which is out of scope here.
+- **The "host mode disabled" acceptance case still needs a fix.** That program opens a
+  *relative* name while the bridge is off; the legacy `VirtualFileSystem.getObjectFromPath`
+  resolves the VFS path through Node's `fs.readFileSync` (`/vfs-only.bin` for a relative name),
+  which throws ENOENT in the native core before the permission check runs. The case asserts the
+  right invariant (the host bridge must stay inert), but it has to be expressed against a path
+  the legacy backend can actually read, or tolerate that legacy failure, before CI can go green
+  on it. This is the one known outstanding risk of the committed acceptance test.

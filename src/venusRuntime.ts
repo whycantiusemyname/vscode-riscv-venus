@@ -116,7 +116,10 @@ export class VenusRuntime extends EventEmitter {
 			this.applySettings(settings);
 			simulator.frontendAPI.setArgs(programArgs);
 			let text: string = readFileSync(fpath).toString();
-			let posixPath = helpers.toPosixPath(fpath);
+			// Feed Venus the same canonical path we use for source maps. On Windows
+			// this also normalizes an uppercase drive (C:) to the drive form handled
+			// by the legacy VFS when resolving relative .import directives.
+			let posixPath = helpers.canonicalSourcePath(fpath);
 			var[success, error, warnings] = simulator.driver.externalAssemble(text, posixPath, fName);
 			if (!success) {
 				VenusRenderer.getInstance().showErrorWithPopup(error);

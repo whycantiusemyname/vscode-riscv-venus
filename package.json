@@ -38,6 +38,7 @@
 		"test": "node ./out/test/runTest.js",
 		"pretest:course": "npm run compile",
 		"test:course": "mocha --ui tdd --reporter spec ./out/test/suite/courseVenus.test.js",
+		"test:course-parity": "node scripts/ci/venus-course-parity.js",
 		"package": "vsce package",
 		"publish": "vsce publish",
 		"vscode:prepublish": "webpack --mode production",

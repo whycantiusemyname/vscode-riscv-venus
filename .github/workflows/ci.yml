@@ -89,6 +89,16 @@ jobs:
       - name: Run headless CS61C course parity tests
         run: npm run test:course
 
+      - name: Differential acceptance against the pinned course venus.jar
+        run: |
+          JAR=course-fa24/projects/proj2-cs61classify/tools/venus.jar
+          if [ -f "$JAR" ]; then
+            VENUS_COURSE_JAR="$JAR" VENUS_COURSE_REQUIRE=1 npm run test:course-parity
+          else
+            echo '::notice::course venus.jar is not present in this checkout; the differential harness reports SKIPPED'
+            npm run test:course-parity
+          fi
+
       - name: Ensure xvfb is available
         shell: bash
         run: |
@@ -115,7 +125,6 @@ jobs:
             exit 1
           fi
           echo "VSCODE_EXECUTABLE_PATH=${code}" >> "${GITHUB_ENV}"
-
       - name: Run real VS Code extension-host acceptance tests
         run: xvfb-run -a npm test
 

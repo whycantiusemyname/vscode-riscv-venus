@@ -5,11 +5,13 @@ import {
 	VenusCourseMode,
 	planVenusCourseRun,
 	resolveWorkingDirectory,
+	selectProjectRoot,
 	VENUS_COURSE_MODES,
 	venusCourseModeDefinition
 } from './venusCourseArgs';
 import { javaExecutableExists, locateVenusJar, resolveJavaExecutable } from './venusJarLocator';
 import { runVenusCourseProcess, VenusCourseProcessResult } from './venusCourseProcess';
+import { summariseVenusCourseResult } from './venusCourseReport';
 
 export const VENUS_COURSE_CONFIG_SECTION = 'riscv-venus.course';
 export const VENUS_COURSE_OUTPUT_CHANNEL = 'Venus Course Checks';
@@ -78,7 +80,11 @@ function buildInvocation(
 	settings: VenusCourseSettings
 ): VenusCourseInvocation {
 	const explicitWorkingDirectory = settings.workingDirectory && settings.workingDirectory.length > 0
-		? resolveWorkingDirectory(settings.workingDirectory, programPath)
+		? resolveWorkingDirectory(
+			settings.workingDirectory,
+			programPath,
+			selectProjectRoot(programPath, workspaceRootPaths())
+		)
 		: undefined;
 
 	return {
@@ -158,14 +164,16 @@ export async function runVenusCourseCheck(
 		return;
 	}
 
+	const summary = summariseVenusCourseResult(mode, result.exitCode, result.output);
 	const exitCode = result.exitCode;
 	output.appendLine(`[exit code ${exitCode === undefined ? 'unknown' : exitCode}]`);
+	output.appendLine(`[${summary.message}]`);
 
-	if (exitCode === 0) {
-		vscode.window.showInformationMessage(`${definition.label} finished (exit code 0).`);
+	if (summary.ok) {
+		vscode.window.showInformationMessage(`${definition.label}: ${summary.message}`);
 	} else {
 		const choice = await vscode.window.showWarningMessage(
-			`${definition.label} exited with code ${exitCode}.`,
+			`${definition.label}: ${summary.message}`,
 			'Show Output'
 		);
 		if (choice === 'Show Output') { output.show(true); }

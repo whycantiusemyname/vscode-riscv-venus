@@ -18,8 +18,18 @@ import {
 import { firstExistingFile, locateVenusJar, resolveJavaExecutable } from '../../course/venusJarLocator';
 import { runVenusCourseProcess } from '../../course/venusCourseProcess';
 
-const JAR = path.join('C:', 'course fa24', 'projects', 'proj2-cs61classify', 'tools', 'venus.jar');
-const PROGRAM = path.join('C:', 'project with spaces', 'test-src', 'test_abs_one.s');
+/**
+ * Absolute paths that mean the same thing on Windows and POSIX. The suite used
+ * to build Windows-style `C:` paths, which are relative on Linux and made the
+ * `path.isAbsolute` branches unreachable there.
+ */
+const PLATFORM_ROOT = path.parse(path.resolve(__dirname)).root;
+function absolute(...parts: string[]): string {
+	return path.join(PLATFORM_ROOT, ...parts);
+}
+
+const JAR = absolute('course fa24', 'projects', 'proj2-cs61classify', 'tools', 'venus.jar');
+const PROGRAM = absolute('project with spaces', 'test-src', 'test_abs_one.s');
 
 function build(overrides: Partial<Parameters<typeof buildVenusJarArgv>[1]> = {}): string[] {
 	return buildVenusJarArgv(JAR, { program: PROGRAM, ...overrides }).javaArgs;
@@ -80,7 +90,7 @@ suite('Venus course JAR bridge', () => {
 	});
 
 	test('keeps -wd and the working directory as separate argv entries so spaces survive', () => {
-		const workingDirectory = path.join('C:', 'projects', 'my project');
+		const workingDirectory = absolute('projects', 'my project');
 		const javaArgs = build({ workingDirectory, passWorkingDirectoryFlag: true });
 		assert.deepStrictEqual(javaArgs, ['-jar', JAR, '-wd', workingDirectory, PROGRAM]);
 	});
@@ -92,14 +102,14 @@ suite('Venus course JAR bridge', () => {
 			immutableText: true,
 			ecallOnlyExit: true,
 			maxSteps: 5,
-			workingDirectory: path.join('C:', 'wd with spaces'),
+			workingDirectory: absolute('wd with spaces'),
 			passWorkingDirectoryFlag: true,
 			programArgs: ['one']
 		});
 		assert.deepStrictEqual(javaArgs, [
 			'-jar', JAR,
 			'-cc', '-mcv', '-it', '-eoe', '-ms', '5',
-			'-wd', path.join('C:', 'wd with spaces'),
+			'-wd', absolute('wd with spaces'),
 			PROGRAM,
 			'one'
 		]);
@@ -108,7 +118,12 @@ suite('Venus course JAR bridge', () => {
 	test('defaults the working directory to the folder holding the .s file', () => {
 		assert.strictEqual(resolveWorkingDirectory(undefined, PROGRAM), path.dirname(path.resolve(PROGRAM)));
 		assert.strictEqual(resolveWorkingDirectory('', PROGRAM), path.dirname(path.resolve(PROGRAM)));
-		assert.strictEqual(resolveWorkingDirectory('C:\\wd', PROGRAM), 'C:\\wd');
+		const explicit = absolute('explicit', 'working directory');
+		assert.strictEqual(resolveWorkingDirectory(explicit, PROGRAM), explicit);
+		assert.strictEqual(
+			resolveWorkingDirectory('test-src', PROGRAM, absolute('project root')),
+			absolute('project root', 'test-src')
+		);
 	});
 
 	test('quotes paths containing spaces for a shell round trip', () => {
@@ -135,8 +150,8 @@ suite('Venus course JAR bridge', () => {
 	});
 
 	test('selects the deepest workspace folder that contains the program', () => {
-		const project2 = path.join('C:', 'CS61C', 'course-fa24', 'projects', 'proj2-cs61classify');
-		const workspaceRoot = path.join('C:', 'CS61C');
+		const project2 = absolute('CS61C', 'course-fa24', 'projects', 'proj2-cs61classify');
+		const workspaceRoot = absolute('CS61C');
 		const program = path.join(project2, 'test-src', 'test_abs_one.s');
 
 		assert.strictEqual(selectProjectRoot(program, [workspaceRoot, project2]), project2);
@@ -148,17 +163,17 @@ suite('Venus course JAR bridge', () => {
 
 suite('Venus course JAR discovery', () => {
 	test('prefers a configured JAR over the discovered layouts', () => {
-		const configured = path.join('C:', 'custom', 'venus.jar');
+		const configured = absolute('custom', 'venus.jar');
 		const candidates = venusJarCandidates({
 			configuredJarPath: configured,
 			programPath: PROGRAM,
-			workspaceRoots: [path.join('C:', 'CS61C')]
+			workspaceRoots: [absolute('CS61C')]
 		});
 		assert.strictEqual(candidates[0], path.resolve(configured));
 	});
 
 	test('resolves a relative configured JAR against each workspace root', () => {
-		const root = path.join('C:', 'CS61C');
+		const root = absolute('CS61C');
 		const candidates = venusJarCandidates({
 			configuredJarPath: 'course-fa24/projects/proj2-cs61classify/tools/venus.jar',
 			programPath: PROGRAM,
@@ -168,7 +183,7 @@ suite('Venus course JAR discovery', () => {
 	});
 
 	test('finds the Project 2 tools/venus.jar layout from a workspace root', () => {
-		const root = path.join('C:', 'CS61C');
+		const root = absolute('CS61C');
 		const candidates = venusJarCandidates({ programPath: PROGRAM, workspaceRoots: [root] });
 		assert.ok(candidates.includes(path.join(root, 'tools', 'venus.jar')));
 		assert.ok(candidates.includes(path.join(root, 'course-fa24', 'projects', 'proj2-cs61classify', 'tools', 'venus.jar')));
@@ -177,7 +192,7 @@ suite('Venus course JAR discovery', () => {
 	});
 
 	test('walks up from the assembly file when it is outside the workspaces', () => {
-		const root = path.join('C:', 'checkout');
+		const root = absolute('checkout');
 		const program = path.join(root, 'test-src', 'test_abs_one.s');
 		const candidates = venusJarCandidates({ programPath: program, workspaceRoots: [] });
 		assert.ok(candidates.includes(path.join(root, 'tools', 'venus.jar')));
@@ -217,11 +232,26 @@ suite('Venus course JAR discovery', () => {
 
 	test('prefers an explicit java path, then JAVA_HOME, then java from PATH', () => {
 		assert.strictEqual(resolveJavaExecutable('/opt/jdk/bin/java', '/other/jdk'), '/opt/jdk/bin/java');
+		const javaHome = absolute('jdk');
+		const executableName = process.platform === 'win32' ? 'java.exe' : 'java';
 		assert.strictEqual(
-			resolveJavaExecutable('', path.join('C:', 'jdk')),
-			path.join('C:', 'jdk', 'bin', process.platform === 'win32' ? 'java.exe' : 'java')
+			resolveJavaExecutable('', javaHome),
+			path.join(javaHome, 'bin', executableName)
 		);
-		assert.strictEqual(resolveJavaExecutable(undefined, undefined), 'java');
+		// The JAVA_HOME default parameter is only consulted when `javaHome` is
+		// `undefined`, and CI runners set JAVA_HOME through setup-java, so both
+		// states are exercised explicitly instead of assuming it is unset.
+		const previousJavaHome = process.env.JAVA_HOME;
+		try {
+			process.env.JAVA_HOME = javaHome;
+			assert.strictEqual(resolveJavaExecutable(undefined), path.join(javaHome, 'bin', executableName));
+		} finally {
+			if (previousJavaHome === undefined) { delete process.env.JAVA_HOME; }
+			else { process.env.JAVA_HOME = previousJavaHome; }
+		}
+		// PATH fallback: an explicit empty javaHome keeps JAVA_HOME out of the way.
+		assert.strictEqual(resolveJavaExecutable(undefined, ''), 'java');
+		assert.strictEqual(resolveJavaExecutable('', ''), 'java');
 	});
 });
 

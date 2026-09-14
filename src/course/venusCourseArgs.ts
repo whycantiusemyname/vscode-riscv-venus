@@ -239,12 +239,24 @@ export function selectProjectRoot(
 	return containing.length > 0 ? containing[0] : roots[0];
 }
 
-/** The directory Venus runs in when no explicit working directory is configured. */
+/**
+ * The directory Venus runs in.
+ *
+ * Without an explicit setting it is the folder holding the `.s` file. A
+ * configured path may be relative - Project 2 runs Venus from `test-src` - so
+ * it is resolved against `projectRoot` (the deepest workspace folder that
+ * contains the program) before it is used as the child process cwd and as the
+ * value of `-wd`.
+ */
 export function resolveWorkingDirectory(
 	explicitWorkingDirectory: string | undefined,
-	programPath: string
+	programPath: string,
+	projectRoot?: string
 ): string {
-	if (explicitWorkingDirectory && explicitWorkingDirectory.length > 0) { return explicitWorkingDirectory; }
+	if (explicitWorkingDirectory && explicitWorkingDirectory.length > 0) {
+		const base = projectRoot && projectRoot.length > 0 ? projectRoot : path.dirname(path.resolve(programPath));
+		return path.resolve(base, explicitWorkingDirectory);
+	}
 	return path.dirname(path.resolve(programPath));
 }
 

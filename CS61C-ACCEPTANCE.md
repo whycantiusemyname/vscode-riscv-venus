@@ -5,7 +5,11 @@ truth for build and extension-host acceptance. It uses JDK 8 only inside the CI
 runner because the pinned Venus core still builds with Gradle 4.9 and Kotlin
 1.3, then uses Node.js 20 to build and package the extension.
 
-The extension-host suite validates the following native debugger path:
+`npm test` runs the real extension-host suite. `src/test/runTest.ts` opens each
+scenario's workspace folder in VS Code with a private `--user-data-dir` and an
+empty `--extensions-dir`, so an already running VS Code or an installed copy of
+this extension cannot influence the result. Scenario data reaches
+`src/test/suite/extension.test.ts` through `CS61C_ACCEPTANCE_*` variables.
 
 1. open a Project 2-shaped program under a directory containing spaces;
 2. assemble `test-src/test_abs_one.s` with `.import ../src/abs.s`;
@@ -71,3 +75,35 @@ contract is: check out submodules recursively, run
 `pwsh test/native/apply-host-file-io-patches.ps1`, rebuild with `npm run compileAll`, and run
 `VENUS_REQUIRE_HOST_FILE_IO=1 node test/native/host-file-io.test.js`. Until that happens, the
 native debugger keeps its previous (non binary-safe) file I/O behaviour.
+
+## Extension-host scenarios
+
+Scenarios:
+
+1. `project-root` - opens the in-repo Project 2 shape
+   (`src/test/fixtures/project with spaces`) as the workspace root.
+2. `spaced-copy` - copies that tree into a temporary directory whose full path
+   contains spaces and opens the copy; the suite asserts that the stopped source
+   is the copy and not the original.
+3. `course-project2` - opt-in via `CS61C_PROJ2_ROOT`, which points at a checkout
+   of `course-fa24/projects/proj2-cs61classify`. That directory is opened
+   read-only; assignment sources are never copied over or modified.
+
+Every scenario validates the same native debugger path:
+
+1. the workspace root is the folder that was opened;
+2. `test-src/test_abs_one.s` is edited as RISC-V and contains `.import ../src/abs.s`;
+3. a source breakpoint at the first instruction of `abs` in the imported
+   `src/abs.s` is forwarded to the adapter and verified;
+4. stop on entry reports the driver, then `next` and `continue` reach a
+   `stopped(breakpoint)` event whose top frame is the imported source file at
+   the requested line, and stepping continues inside that file;
+5. the Integer register scope is exposed and `t0` can be read and written
+   through DAP `setVariable`;
+6. an endless program answers `pause` with `stopped(pause)` and no `terminated`
+   event, keeps the session active, and remains steppable.
+
+Set `VSCODE_EXECUTABLE_PATH` to reuse an installed VS Code instead of
+downloading one, and `CS61C_PROJ2_ROOT` to add the real course project
+scenario.
+

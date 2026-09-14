@@ -1,21 +1,39 @@
 import * as assert from 'assert';
+import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 
+type Direction = 'toAdapter' | 'fromAdapter';
+
 type DapMessage = {
   type: string;
+  direction: Direction;
   event?: string;
   command?: string;
+  seq?: number;
+  request_seq?: number;
+  success?: boolean;
+  arguments?: any;
   body?: any;
 };
 
+/**
+ * Records both directions of the Debug Adapter Protocol traffic, so the
+ * acceptance can prove that the editor really asked the adapter for a
+ * breakpoint in the imported file and that the adapter really verified it.
+ */
 class DebugTranscript {
   readonly messages: DapMessage[] = [];
 
   tracker(): vscode.DebugAdapterTracker {
     return {
-      onDidSendMessage: message => this.messages.push(message as DapMessage)
+      onWillReceiveMessage: message => this.messages.push(this.record(message, 'toAdapter')),
+      onDidSendMessage: message => this.messages.push(this.record(message, 'fromAdapter'))
     };
+  }
+
+  private record(message: any, direction: Direction): DapMessage {
+    return Object.assign({ direction }, message) as DapMessage;
   }
 
   mark(): number {
@@ -25,7 +43,7 @@ class DebugTranscript {
   async waitFor(
     predicate: (message: DapMessage) => boolean,
     from = 0,
-    timeoutMs = 15000
+    timeoutMs = 20000
   ): Promise<DapMessage> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
@@ -34,6 +52,18 @@ class DebugTranscript {
       await new Promise(resolve => setTimeout(resolve, 25));
     }
     throw new Error(`Timed out waiting for DAP message. Transcript: ${JSON.stringify(this.messages, null, 2)}`);
+  }
+
+  receivedStopped(reason: string): boolean {
+    return this.messages.some(message =>
+      message.direction === 'fromAdapter' &&
+      message.type === 'event' &&
+      message.event === 'stopped' &&
+      message.body.reason === reason);
+  }
+
+  eventCount(event: string): number {
+    return this.messages.filter(message => message.type === 'event' && message.event === event).length;
   }
 }
 
@@ -52,115 +82,335 @@ function comparablePath(target: string): string {
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
-suite('CS61C Venus acceptance', () => {
-  const fixtureRoot = path.resolve(__dirname, '../../../src/test/fixtures/project with spaces');
+/** The in-repo Project 2 shape used when the suite is not driven by runTest.js. */
+const FIXTURE_PROJECT = path.resolve(__dirname, '../../../src/test/fixtures/project with spaces');
+
+function environmentOrDefault(name: string, fallback: string): string {
+  const value = process.env[name];
+  return value && value.length > 0 ? value : fallback;
+}
+
+/** Same normalization the debug adapter uses for source paths. */
+function canonical(target: string): string {
+  const absolute = path.normalize(path.resolve(target));
+  return process.platform === 'win32' ? absolute.toLowerCase() : absolute;
+}
+
+function canonicalize(pathValue: string | undefined): string {
+  return canonical(pathValue || '');
+}
+
+/** True for a line that a debugger can actually stop on. */
+function isInstruction(line: string): boolean {
+  const trimmed = line.trim();
+  if (trimmed.length === 0) { return false; }
+  if (trimmed.startsWith('#') || trimmed.startsWith('//')) { return false; }
+  if (trimmed.startsWith('.')) { return false; }
+  if (/^[A-Za-z_.$][\w.$]*\s*:/.test(trimmed)) { return false; }
+  return true;
+}
+
+/**
+ * Fallback for the breakpoint line: the first instruction after `label:`, which
+ * is where a user would click when they set a breakpoint at the start of a
+ * routine. Comments, directives and nested labels are skipped.
+ */
+function firstInstructionLine(file: string, label: string): number | undefined {
+  const labelPattern = new RegExp('^\\s*' + label + '\\s*:');
+  const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
+  for (let index = 0; index < lines.length; index++) {
+    if (!labelPattern.test(lines[index])) {
+      continue;
+    }
+    for (let candidate = index + 1; candidate < lines.length; candidate++) {
+      const line = lines[candidate].trim();
+      if (line.length === 0 || line.startsWith('#') || line.startsWith('//') || line.startsWith('.')) {
+        continue;
+      }
+      if (/^[A-Za-z_.$][\w.$]*\s*:/.test(line)) {
+        continue;
+      }
+      return candidate + 1;
+    }
+  }
+  return undefined;
+}
+
+suite('CS61C Project 2 acceptance', () => {
+  const scenario = environmentOrDefault('CS61C_ACCEPTANCE_SCENARIO', 'fixture-default');
+  const workspaceRoot = environmentOrDefault('CS61C_ACCEPTANCE_WORKSPACE', FIXTURE_PROJECT);
+  const fixtureRoot = workspaceRoot;
+  const programRelative = environmentOrDefault('CS61C_ACCEPTANCE_PROGRAM', 'test-src/test_abs_one.s');
+  const importDirective = environmentOrDefault('CS61C_ACCEPTANCE_IMPORT_DIRECTIVE', '../src/abs.s');
+  const importedRelative = environmentOrDefault('CS61C_ACCEPTANCE_IMPORTED', 'src/abs.s');
+  const entrySymbol = environmentOrDefault('CS61C_ACCEPTANCE_ENTRY_SYMBOL', 'abs');
+  const pauseProgram = environmentOrDefault(
+    'CS61C_ACCEPTANCE_PAUSE_PROGRAM',
+    path.join(workspaceRoot, 'loop.s')
+  );
+
+  const program = path.resolve(workspaceRoot, programRelative);
+  const importedSource = path.resolve(workspaceRoot, importedRelative);
+
+  const breakpointLine = (() => {
+    const configured = process.env.CS61C_ACCEPTANCE_IMPORT_LINE;
+    if (configured && configured.length > 0) {
+      const parsed = Number(configured);
+      assert.ok(
+        Number.isInteger(parsed) && parsed > 0,
+        `CS61C_ACCEPTANCE_IMPORT_LINE must be a positive line number, got "${configured}"`
+      );
+      return parsed;
+    }
+    const derived = firstInstructionLine(importedSource, entrySymbol);
+    assert.ok(derived, `could not derive the first instruction of ${entrySymbol} from ${importedSource}`);
+    return derived!;
+  })();
+
+  let transcript: DebugTranscript;
+
+  setup(() => {
+    transcript = new DebugTranscript();
+  });
 
   teardown(async () => {
     vscode.debug.removeBreakpoints(vscode.debug.breakpoints);
     await vscode.debug.stopDebugging();
   });
 
-  test('debugs a Project 2 style .import and hits a source breakpoint', async () => {
+  test('opens the Project 2 root as the single workspace folder', () => {
+    const folders = vscode.workspace.workspaceFolders;
+    assert.ok(folders, `scenario "${scenario}" must open a workspace folder (${workspaceRoot})`);
+    assert.strictEqual(folders!.length, 1, `scenario "${scenario}" must open exactly one workspace folder`);
+    assert.strictEqual(
+      canonical(folders![0].uri.fsPath),
+      canonical(workspaceRoot),
+      `scenario "${scenario}" must open ${workspaceRoot}`
+    );
+  });
+
+  test('test_abs_one.s imports the abs routine from the imported source', async () => {
+    assert.ok(fs.existsSync(program), `the driver ${program} must exist`);
+    const document = await vscode.workspace.openTextDocument(vscode.Uri.file(program));
+    assert.strictEqual(document.languageId, 'riscv', `${programRelative} must be edited as RISC-V assembly`);
+    const directives = document.getText().split(/\r?\n/).map(line => line.trim());
+    assert.ok(
+      directives.indexOf(`.import ${importDirective}`) >= 0,
+      `${programRelative} must contain the directive ".import ${importDirective}"`
+    );
+    assert.ok(fs.existsSync(importedSource), `the imported source ${importedSource} must exist`);
+    await vscode.window.showTextDocument(document, { preview: false });
+  });
+
+  test('hits a source breakpoint in the imported file after stepping and continuing', async () => {
     const extension = vscode.extensions.getExtension('hm.riscv-venus');
-    assert.ok(extension, 'the Venus extension must be installed in the extension host');
+    assert.ok(extension, 'the Venus extension must be loaded from the extension development path');
     await extension!.activate();
 
-    const transcript = new DebugTranscript();
+    vscode.debug.removeBreakpoints(vscode.debug.breakpoints);
+
+    const importedDocument = await vscode.workspace.openTextDocument(vscode.Uri.file(importedSource));
+    assert.strictEqual(importedDocument.languageId, 'riscv', `${importedRelative} must be edited as RISC-V assembly`);
+    assert.ok(
+      breakpointLine >= 1 && breakpointLine <= importedDocument.lineCount,
+      `expected a breakpoint line inside ${importedRelative}, got ${breakpointLine}`
+    );
+    const entryLine = importedDocument.lineAt(breakpointLine - 1).text;
+    assert.ok(
+      isInstruction(entryLine),
+      `line ${breakpointLine} of ${importedRelative} must be the first instruction of ${entrySymbol}, saw "${entryLine}"`
+    );
+    await vscode.window.showTextDocument(importedDocument, { preview: false });
+
+    const sourceBreakpoint = new vscode.SourceBreakpoint(
+      new vscode.Location(vscode.Uri.file(importedSource), new vscode.Position(breakpointLine - 1, 0))
+    );
+    vscode.debug.addBreakpoints([sourceBreakpoint]);
+
     const tracker = vscode.debug.registerDebugAdapterTrackerFactory('venus', {
       createDebugAdapterTracker: () => transcript.tracker()
     });
 
-    const program = path.join(fixtureRoot, 'test-src', 'test_abs_one.s');
-    const importedSource = path.join(fixtureRoot, 'src', 'abs.s');
-    const importedUri = vscode.Uri.file(importedSource);
-    const sourceBreakpoint = new vscode.SourceBreakpoint(
-      new vscode.Location(importedUri, new vscode.Position(3, 0))
-    );
-    vscode.debug.addBreakpoints([sourceBreakpoint]);
-
     try {
-      const started = await vscode.debug.startDebugging(undefined, {
+      const started = await vscode.debug.startDebugging(vscode.workspace.workspaceFolders![0], {
         type: 'venus',
         request: 'launch',
-        name: 'CS61C import acceptance',
+        name: `CS61C ${scenario}`,
         program,
         stopOnEntry: true,
         stopAtBreakpoints: true,
         args: ['argument with spaces']
       });
-      assert.strictEqual(started, true, 'debug session should start');
+      assert.strictEqual(started, true, 'the Venus debug session must start');
+
+      // The editor has to forward our source breakpoint to the adapter, and the
+      // adapter has to verify it against the assembled imported file.
+      const breakpointRequest = await transcript.waitFor(message =>
+        message.direction === 'toAdapter' &&
+        message.type === 'request' &&
+        message.command === 'setBreakpoints' &&
+        !!message.arguments &&
+        canonicalize(message.arguments.source && message.arguments.source.path) === canonical(importedSource) &&
+        (message.arguments.lines || []).indexOf(breakpointLine) >= 0);
+      const breakpointResponse = await transcript.waitFor(message =>
+        message.direction === 'fromAdapter' &&
+        message.type === 'response' &&
+        message.command === 'setBreakpoints' &&
+        message.request_seq === breakpointRequest.seq);
+      assert.strictEqual(breakpointResponse.success, true, 'the setBreakpoints request must succeed');
+      assert.strictEqual(
+        breakpointResponse.body.breakpoints[0].verified,
+        true,
+        `the breakpoint at ${importedRelative}:${breakpointLine} must be verified`
+      );
+      assert.strictEqual(breakpointResponse.body.breakpoints[0].line, breakpointLine);
 
       await transcript.waitFor(message =>
-        message.type === 'event' && message.event === 'stopped' && message.body.reason === 'entry');
-      await transcript.waitFor(message =>
-        message.type === 'event' && message.event === 'breakpoint' && message.body.breakpoint.verified === true);
+        message.direction === 'fromAdapter' &&
+        message.type === 'event' &&
+        message.event === 'stopped' &&
+        message.body.reason === 'entry');
 
       const session = vscode.debug.activeDebugSession;
-      assert.ok(session, 'a Venus debug session should be active');
+      assert.ok(session, 'a Venus debug session must be active');
+      assert.strictEqual(session!.type, 'venus');
 
       const entryStack = await session!.customRequest('stackTrace', { threadId: 1 });
-      assert.ok(entryStack.stackFrames[0].source.path.endsWith('test_abs_one.s'));
+      assert.ok(entryStack.stackFrames.length >= 1, 'stop on entry must report a stack frame');
+      assert.strictEqual(
+        canonicalize(entryStack.stackFrames[0].source.path),
+        canonical(program),
+        `stop on entry must report ${programRelative}`
+      );
 
       const stepMark = transcript.mark();
       await session!.customRequest('next', { threadId: 1 });
       await transcript.waitFor(message =>
-        message.type === 'event' && message.event === 'stopped' && message.body.reason === 'step', stepMark);
+        message.direction === 'fromAdapter' &&
+        message.type === 'event' &&
+        message.event === 'stopped' &&
+        message.body.reason === 'step', stepMark);
 
       const continueMark = transcript.mark();
       await session!.customRequest('continue', { threadId: 1 });
       await transcript.waitFor(message =>
-        message.type === 'event' && message.event === 'stopped' && message.body.reason === 'breakpoint', continueMark);
+        message.direction === 'fromAdapter' &&
+        message.type === 'event' &&
+        message.event === 'stopped' &&
+        message.body.reason === 'breakpoint', continueMark);
+      assert.ok(
+        transcript.receivedStopped('breakpoint'),
+        `continuing from ${programRelative} must stop at the breakpoint in ${importedRelative}`
+      );
 
+      const stoppedStack = await session!.customRequest('stackTrace', { threadId: 1 });
+      const stoppedFrame = stoppedStack.stackFrames[0];
+      assert.strictEqual(
+        canonicalize(stoppedFrame.source.path),
+        canonical(importedSource),
+        `the breakpoint must stop inside ${importedRelative}, not in ${stoppedFrame.source.path}`
+      );
+      assert.strictEqual(stoppedFrame.source.name, path.basename(importedSource));
+      assert.strictEqual(
+        stoppedFrame.line,
+        breakpointLine,
+        `the breakpoint must stop at ${importedRelative}:${breakpointLine}`
+      );
+
+      const importedStepMark = transcript.mark();
+      await session!.customRequest('next', { threadId: 1 });
+      await transcript.waitFor(message =>
+        message.direction === 'fromAdapter' &&
+        message.type === 'event' &&
+        message.event === 'stopped' &&
+        message.body.reason === 'step', importedStepMark);
       const importedStack = await session!.customRequest('stackTrace', { threadId: 1 });
-      const stoppedPath = path.normalize(importedStack.stackFrames[0].source.path);
-      assert.strictEqual(stoppedPath.toLowerCase(), path.normalize(importedSource).toLowerCase());
-      assert.strictEqual(importedStack.stackFrames[0].line, 4);
+      assert.strictEqual(
+        canonicalize(importedStack.stackFrames[0].source.path),
+        canonical(importedSource),
+        `stepping must stay inside ${importedRelative}`
+      );
+      assert.strictEqual(
+        importedStack.stackFrames[0].line,
+        breakpointLine + 1,
+        `stepping from ${importedRelative}:${breakpointLine} must reach the next line`
+      );
 
       const scopes = await session!.customRequest('scopes', { frameId: 0 });
       const integerScope = scopes.scopes.find((scope: any) => scope.name === 'Integer');
-      assert.ok(integerScope, 'integer register scope should be available');
-
+      assert.ok(integerScope, 'the Integer register scope must be exposed');
       await session!.customRequest('setVariable', {
         variablesReference: integerScope.variablesReference,
         name: 'x5',
         value: '0x2a'
       });
-
       const variables = await session!.customRequest('variables', {
         variablesReference: integerScope.variablesReference
       });
       const t0 = variables.variables.find((variable: any) => variable.name.startsWith('x05'));
-      assert.ok(t0, 't0 should be visible');
-      assert.strictEqual(t0.value.toLowerCase(), '0x0000002a');
+      assert.ok(t0, 't0 must be visible in the Integer scope');
+      assert.strictEqual(String(t0.value).toLowerCase(), '0x0000002a');
     } finally {
       tracker.dispose();
     }
   });
 
-  test('pause interrupts a running program without terminating it', async () => {
-    const transcript = new DebugTranscript();
+  test('pause interrupts a running program without terminating the session', async () => {
+    assert.ok(fs.existsSync(pauseProgram), `the endless program ${pauseProgram} must exist`);
+    await vscode.workspace.openTextDocument(vscode.Uri.file(pauseProgram));
+
     const tracker = vscode.debug.registerDebugAdapterTrackerFactory('venus', {
       createDebugAdapterTracker: () => transcript.tracker()
     });
 
     try {
-      const started = await vscode.debug.startDebugging(undefined, {
+      const started = await vscode.debug.startDebugging(vscode.workspace.workspaceFolders![0], {
         type: 'venus',
         request: 'launch',
-        name: 'CS61C pause acceptance',
-        program: path.join(fixtureRoot, 'loop.s'),
+        name: `CS61C ${scenario} pause`,
+        program: pauseProgram,
         stopOnEntry: false,
         stopAtBreakpoints: true
       });
-      assert.strictEqual(started, true);
+      assert.strictEqual(started, true, 'the Venus debug session must start');
 
       const session = vscode.debug.activeDebugSession;
-      assert.ok(session);
+      assert.ok(session, 'a Venus debug session must be active');
+
       const pauseMark = transcript.mark();
       await session!.customRequest('pause', { threadId: 1 });
       await transcript.waitFor(message =>
-        message.type === 'event' && message.event === 'stopped' && message.body.reason === 'pause', pauseMark);
-      assert.strictEqual(vscode.debug.activeDebugSession?.id, session!.id);
+        message.direction === 'fromAdapter' &&
+        message.type === 'event' &&
+        message.event === 'stopped' &&
+        message.body.reason === 'pause', pauseMark);
+
+      assert.strictEqual(
+        transcript.eventCount('terminated'),
+        0,
+        'pausing a running program must not terminate the debug session'
+      );
+      assert.strictEqual(
+        vscode.debug.activeDebugSession && vscode.debug.activeDebugSession.id,
+        session!.id,
+        'the paused session must stay the active session'
+      );
+
+      const pausedStack = await session!.customRequest('stackTrace', { threadId: 1 });
+      assert.ok(pausedStack.stackFrames.length >= 1, 'a paused program must still report a stack frame');
+      assert.strictEqual(
+        canonicalize(pausedStack.stackFrames[0].source.path),
+        canonical(pauseProgram),
+        'the paused program must be reported at its own source'
+      );
+
+      const resumeStepMark = transcript.mark();
+      await session!.customRequest('next', { threadId: 1 });
+      await transcript.waitFor(message =>
+        message.direction === 'fromAdapter' &&
+        message.type === 'event' &&
+        message.event === 'stopped' &&
+        message.body.reason === 'step', resumeStepMark);
     } finally {
       tracker.dispose();
     }
@@ -177,7 +427,7 @@ suite('CS61C Venus acceptance', () => {
         type: 'venus',
         request: 'launch',
         name: 'CS61C pause regression',
-        program: path.join(fixtureRoot, 'loop.s'),
+        program: pauseProgram,
         stopOnEntry: false,
         stopAtBreakpoints: true
       });

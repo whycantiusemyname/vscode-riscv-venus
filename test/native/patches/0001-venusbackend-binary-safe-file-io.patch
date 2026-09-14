@@ -407,9 +407,9 @@ index 0000000..ca9f78c
 +
 +    /** True when [path] names an existing regular file. */
 +    fun isFile(path: String): Boolean {
-+        val fs = fs() ?: return false
++        val fsModule = fs() ?: return false
 +        return try {
-+            fs.statSync(path).isFile() as Boolean
++            fsModule.statSync(path).isFile() as Boolean
 +        } catch (e: dynamic) {
 +            false
 +        }
@@ -417,13 +417,13 @@ index 0000000..ca9f78c
 +
 +    /** Reads the whole file. Returns `null` when it cannot be read. */
 +    fun readBytes(path: String): ByteArray? {
-+        val fs = fs() ?: return null
++        val fsModule = fs() ?: return null
 +        return try {
-+            val fd = fs.openSync(path, "r") as Int
++            val fd = fsModule.openSync(path, "r") as Int
 +            try {
 +                readFully(fd, fileSize(fd), 0)
 +            } finally {
-+                fs.closeSync(fd)
++                fsModule.closeSync(fd)
 +            }
 +        } catch (e: dynamic) {
 +            null
@@ -446,9 +446,9 @@ index 0000000..ca9f78c
 +
 +    /** Opens a host file with a Node flag string (`r`, `w`, `a`, `r+`, `w+`, `a+`). */
 +    fun openFile(path: String, flags: String): Int {
-+        val fs = fs() ?: return FilesHandler.EOF
++        val fsModule = fs() ?: return FilesHandler.EOF
 +        return try {
-+            fs.openSync(path, flags) as Int
++            fsModule.openSync(path, flags) as Int
 +        } catch (e: dynamic) {
 +            FilesHandler.EOF
 +        }
@@ -456,9 +456,9 @@ index 0000000..ca9f78c
 +
 +    /** Closes a host file descriptor. */
 +    fun closeFile(fd: Int): Boolean {
-+        val fs = fs() ?: return false
++        val fsModule = fs() ?: return false
 +        return try {
-+            fs.closeSync(fd)
++            fsModule.closeSync(fd)
 +            true
 +        } catch (e: dynamic) {
 +            false
@@ -467,9 +467,9 @@ index 0000000..ca9f78c
 +
 +    /** Size of an open file in bytes, or -1 when it cannot be determined. */
 +    fun fileSize(fd: Int): Int {
-+        val fs = fs() ?: return -1
++        val fsModule = fs() ?: return -1
 +        return try {
-+            (fs.fstatSync(fd).size as Number).toInt()
++            (fsModule.fstatSync(fd).size as Number).toInt()
 +        } catch (e: dynamic) {
 +            -1
 +        }
@@ -488,9 +488,9 @@ index 0000000..ca9f78c
 +
 +    /** Writes [data] at [position]. Returns the number of bytes written, or [FilesHandler.EOF]. */
 +    fun writeAt(fd: Int, data: ByteArray, position: Int): Int {
-+        val fs = fs() ?: return FilesHandler.EOF
++        val fsModule = fs() ?: return FilesHandler.EOF
 +        return try {
-+            fs.writeSync(fd, data, 0, data.size, position) as Int
++            fsModule.writeSync(fd, data, 0, data.size, position) as Int
 +        } catch (e: dynamic) {
 +            FilesHandler.EOF
 +        }
@@ -513,9 +513,9 @@ index 0000000..ca9f78c
 +    }
 +
 +    private fun readInto(fd: Int, buffer: ByteArray, offset: Int, length: Int, position: Int): Int? {
-+        val fs = fs() ?: return null
++        val fsModule = fs() ?: return null
 +        return try {
-+            fs.readSync(fd, buffer, offset, length, position) as Int
++            fsModule.readSync(fd, buffer, offset, length, position) as Int
 +        } catch (e: dynamic) {
 +            null
 +        }

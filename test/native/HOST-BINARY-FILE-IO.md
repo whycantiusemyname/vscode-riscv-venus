@@ -100,13 +100,41 @@ reads `src/venusRuntime.ts` and asserts that `assemble()` enables host file mode
 directory before assembling, that both core entry points are looked up defensively, and that
 `stop()` resets the backend. It needs no build and no VS Code test host.
 
+## Compile audit against the pinned toolchain
+
+No Kotlin compiler is available outside CI, so the patches were audited statically against the
+pinned Kotlin 1.3 / Gradle 4.9 Kotlin/JS setup. Every construct the patch adds already occurs in
+the pinned sources, or in a `build/kotlin-js-min/main/` output produced by that same toolchain:
+
+- `js("...") as Int` / `as Boolean` / `as String` -- the compiler emits `typeof x === 'number' /
+  'boolean' / 'string'` guards; used by `venus/api/ScriptManager.kt` and
+  `venus/api/FunctionsList.kt`. `as Number` is guarded by `Kotlin.isNumber`, which is
+  `typeof a === 'number'`.
+- `dynamic` properties initialised to `null` and calls through `dynamic` receivers --
+  `venus/Renderer.kt`. `@JsName` members on the `Driver` object -- used throughout
+  `venus/Driver.kt`.
+- `ByteArray` is an `Int8Array` in this toolchain, which is what `fs.readSync`/`fs.writeSync`
+  accept; the argument order `(fd, buffer, offset, length, position)` matches the pinned Node
+  API.
+- The patch text applies cleanly (`git apply --check`, and a real `git apply`) to `70472ec0` and
+  `aa96da2` in both LF and CRLF checkouts, so CI does not depend on the runner's line-ending
+  settings.
+
+The one construct without a precedent in this repository is `catch (e: dynamic)`, the Kotlin/JS
+idiom for swallowing a JavaScript exception (a `catch (e: Throwable)` would not catch Node's
+`Error` objects). If the core fails to compile in CI, that is the first thing to change: move the
+try/catch into the `js("...")` string, which is plain JavaScript and cannot fail to type-check.
+
+The local `fs` shadowing the `fs()` helper (`val fs = fs()`) was renamed to `fsModule` for the
+same reason -- it is the only place where a Kotlin name could be resolved against the wrong
+declaration.
+
 ## Remaining risks and known limits
 
-- **Unvalidated compile.** The Kotlin edits were reviewed by hand and both patches apply cleanly
-  (`git apply --check`) to clean checkouts of `70472ec0` and `aa96da2`, but the core has not been
-  compiled or executed. The first real compile happens in CI, so small Kotlin 1.3/Gradle 4.9
-  fixes (for instance around `dynamic`/`js(...)` usage) may still be needed before the test can
-  pass.
+- **Unvalidated compile.** The Kotlin edits were reviewed by hand, audited against the pinned
+  toolchain (see the previous section) and applied cleanly to `70472ec0`/`aa96da2`, but the core
+  has never been compiled or executed: CI is the first real compile, and `catch (e: dynamic)` is
+  the construct most likely to need the documented fallback.
 - **The opt in only helps once patch 0002 has been applied and the core rebuilt.** The debugger
   already calls `setHostFileCwd`/`enableHostFileIO` behind `typeof` guards, but a core without the
   API ignores them and keeps the old string-based path.

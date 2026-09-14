@@ -97,6 +97,7 @@ export class VenusRuntime extends EventEmitter {
 	private _usedRegisters = new SortedSet();
 
 	private _maximumLineNumber = new Map<string, number>();
+	// PCs toggled in the simulator, with the number of source breakpoints resolved to them.
 	private _activeBreakpointPcs = new Map<number, number>();
 	private _pauseRequested = false;
 
@@ -940,30 +941,42 @@ export class VenusRuntime extends EventEmitter {
 		}
 	}
 
+	/**
+	 * The machine instruction a source breakpoint is armed on.
+	 *
+	 * A pseudo-instruction expands to several machine instructions which all
+	 * carry the same source line (`la` is an `auipc`/`addi` pair, a far `li` is a
+	 * `lui`/`addi` pair, ...). Venus stops in front of the instruction it is about
+	 * to execute, so arming every instruction of the line stops once per machine
+	 * instruction: continuing from the first half would immediately report the
+	 * same source line again. Only the first instruction of the line is reachable
+	 * (a label binds to the start of the line), so a breakpoint is armed there.
+	 */
+	private resolveBreakpointPc(path: string, line: number): number | undefined {
+		const pcs = this.resolveBreakpointPcs(path, line);
+		return pcs ? pcs[0] : undefined;
+	}
+
 	private activateBreakpoint(bp: VenusBreakpoint): void {
-		const pcs = this.resolveBreakpointPcs(bp.path, bp.line);
-		if (!pcs) { return; }
-		pcs.forEach(pc => {
-			const references = this._activeBreakpointPcs.get(pc) || 0;
-			if (references === 0) {
-				simulator.driver.toggleBreakpoint(pc);
-			}
-			this._activeBreakpointPcs.set(pc, references + 1);
-		});
+		const pc = this.resolveBreakpointPc(bp.path, bp.line);
+		if (pc === undefined) { return; }
+		const references = this._activeBreakpointPcs.get(pc) || 0;
+		if (references === 0) {
+			simulator.driver.toggleBreakpoint(pc);
+		}
+		this._activeBreakpointPcs.set(pc, references + 1);
 	}
 
 	private deactivateBreakpoint(bp: VenusBreakpoint): void {
-		const pcs = this.resolveBreakpointPcs(bp.path, bp.line);
-		if (!pcs) { return; }
-		pcs.forEach(pc => {
-			const references = this._activeBreakpointPcs.get(pc) || 0;
-			if (references === 1) {
-				simulator.driver.toggleBreakpoint(pc);
-				this._activeBreakpointPcs.delete(pc);
-			} else if (references > 1) {
-				this._activeBreakpointPcs.set(pc, references - 1);
-			}
-		});
+		const pc = this.resolveBreakpointPc(bp.path, bp.line);
+		if (pc === undefined) { return; }
+		const references = this._activeBreakpointPcs.get(pc) || 0;
+		if (references === 1) {
+			simulator.driver.toggleBreakpoint(pc);
+			this._activeBreakpointPcs.delete(pc);
+		} else if (references > 1) {
+			this._activeBreakpointPcs.set(pc, references - 1);
+		}
 	}
 
 	private reapplyBreakpoints(): void {
